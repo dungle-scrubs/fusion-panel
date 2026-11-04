@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0](https://github.com/dungle-scrubs/fusion-panel/compare/fusion-panel-v0.2.2...fusion-panel-v0.3.0) (2026-11-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* let calling harnesses execute panel jobs ([#69](https://github.com/dungle-scrubs/fusion-panel/issues/69))
+
+### Added
+
+* blind merge stage on jury ([63b51aa](https://github.com/dungle-scrubs/fusion-panel/commit/63b51aa373841dc2685452a51449f6b2a562cc0c))
+* bounded vocabulary on jury and delphi ([d719110](https://github.com/dungle-scrubs/fusion-panel/commit/d719110a74f3b349f8e142c5a01980dcee0c63d5))
+* deep-research evidence supply for pattern runs ([ca24350](https://github.com/dungle-scrubs/fusion-panel/commit/ca24350c79f5e2462292033290bcfa9b4f3b3c62))
+* let calling harnesses execute panel jobs ([#69](https://github.com/dungle-scrubs/fusion-panel/issues/69)) ([4669477](https://github.com/dungle-scrubs/fusion-panel/commit/4669477419030a828b8d0b4f5237c708934484dc))
+* per-worker rosters and diversity counts on all patterns ([00eebca](https://github.com/dungle-scrubs/fusion-panel/commit/00eebca915eeaf4f3ef83a3b0c17c1122e76815a))
+* suspend and resume for worker questions ([83a80ad](https://github.com/dungle-scrubs/fusion-panel/commit/83a80ad72319b99ef3eaae602340583c62ea1010))
+
 ## [0.2.2](https://github.com/dungle-scrubs/fusion-panel/compare/fusion-panel-v0.2.1...fusion-panel-v0.2.2) (2026-09-24)
 
 
