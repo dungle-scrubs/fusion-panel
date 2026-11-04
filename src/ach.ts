@@ -1,16 +1,20 @@
 import { readFileSync } from "node:fs";
 import type { AcceptedClaim, FusedOutput, RunReport } from "./engine";
 import {
-  diversityCounts,
+  checkClaimCount,
+  checkClaimReferences,
+  checkRoleClaims,
+  DEFAULT_HARNESS_HINT,
   type DiversityCounts,
-  type PatternDefinition,
-  type PatternOptions,
-  resolveRoster,
-  WAIT_OPTION,
-  WAIT_SEC_OPTION,
+  diversityCounts,
   EVIDENCE_OPTION,
-  resolveEvidence,
+  HARNESS_OPTION,
+  type PatternDefinition,
+  type PatternIo,
+  type PatternOptions,
   ROSTER_OPTION,
+  resolveEvidence,
+  resolveRoster,
 } from "./pattern";
 
 export const ACH_MIN_WORKERS = 2;
@@ -211,7 +215,7 @@ export function achFuse(accepted: readonly AcceptedClaim[]): AchDecision {
 }
 
 export const achDefinition: PatternDefinition = {
-  build(options: PatternOptions) {
+  build(options: PatternOptions, io?: PatternIo) {
     const task = String(options["task"] ?? "");
     if (task.trim().length === 0) {
       return { error: "--task must be non-empty" };
@@ -229,17 +233,46 @@ export const achDefinition: PatternDefinition = {
       return { error: rostered.error };
     }
     const roster = rostered.roster;
-    const evidenced = resolveEvidence(options, (path) => readFileSync(path, "utf8"));
+    const readEvidence = io?.readEvidence ?? ((path: string) => readFileSync(path, "utf8"));
+    const evidenced = resolveEvidence(options, readEvidence);
     if ("error" in evidenced) {
       return { error: evidenced.error };
     }
     const supplied = evidenced.block;
     return {
       fuse: achFuse,
-      stoppingRule: "every worker submits hypotheses and evidence or times out",
+      validateSubmission(_job, claims) {
+        const hypotheses = claims.filter((claim) => claim.kind === "hypothesis");
+        const evidence = claims.filter((claim) => claim.kind === "evidence");
+        const errors = [
+          ...checkRoleClaims(claims, {
+            kinds: ["hypothesis", "evidence"],
+            count: { min: 2, max: 6 },
+            actions: { required: false },
+          }),
+          ...checkClaimCount(hypotheses.length, { min: 1, max: 3 }, "hypotheses"),
+          ...checkClaimCount(evidence.length, { min: 1, max: 3 }, "evidence"),
+          ...checkClaimReferences(
+            hypotheses,
+            new Set(evidence.map((claim) => String(claim.claim_id))),
+          ),
+          ...checkClaimReferences(
+            evidence,
+            new Set(hypotheses.map((claim) => String(claim.claim_id))),
+          ),
+        ];
+        for (const claim of evidence) {
+          if (claim.novelty !== "confirms" && claim.novelty !== "contradicts") {
+            errors.push(`${String(claim.claim_id)}: evidence novelty must be confirms|contradicts`);
+          }
+        }
+        return errors;
+      },
+      stoppingRule:
+        "every worker submits hypotheses and evidence or the caller reports its failure",
       task,
       workers: Array.from({ length: workers }, (_, index) => {
-        const slot = roster[index] ?? { harness: "pi" };
+        const slot = roster[index] ?? { harness: DEFAULT_HARNESS_HINT };
         return {
           harness: slot.harness,
           ...(slot.model !== undefined ? { model: slot.model } : {}),
@@ -255,18 +288,16 @@ export const achDefinition: PatternDefinition = {
     "ACH Matrix pattern run: sealed analysts submit hypotheses and diagnostic evidence " +
     "as linked claims; the tool builds the hypotheses-x-evidence matrix mechanically and " +
     "reports which evidence discriminates and which is consistent with everything. " +
-    "Writes .fusion/runs/<runId>/.",
+    "Starts a caller-managed run and returns the first wave of jobs.",
   options: [
-    WAIT_OPTION,
-    WAIT_SEC_OPTION,
     {
       default: String(ACH_DEFAULT_WORKERS),
       description: "number of sealed analysts",
       name: "workers",
     },
-    { default: "pi", description: "harness for every worker (hcn name)", name: "harness" },
-    { description: "model id passed to every worker", name: "model" },
-    { default: "300", description: "per-worker wall-clock budget in seconds", name: "timeout" },
+    HARNESS_OPTION,
+    { description: "model hint passed to every worker", name: "model" },
+    { default: "300", description: "per-worker advisory budget in seconds", name: "timeout" },
     ROSTER_OPTION,
     EVIDENCE_OPTION,
     { description: "the question the analysts hypothesize about", name: "task", required: true },

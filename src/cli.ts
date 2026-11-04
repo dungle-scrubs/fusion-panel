@@ -1,20 +1,31 @@
 #!/usr/bin/env node
 /**
- * fusion CLI entrypoint (RFC-01; envelope and exit contract per ADR-0002).
- * Every command emits an {ok, run, step, errors[]} envelope - machine
- * shaped with --json, human text plus error lines without - and exits by
- * class: 0 ok, 1 usage, 2 validation/gate, 3 nothing takeable, 4
- * internal. Each invocation appends start/end lines to
- * .fusion/commands.jsonl; a start with no end is a hung-or-killed trace.
+ * fusion CLI entrypoint (RFC-01; envelope and exit contract per ADR-0002;
+ * caller-managed delegation per ADR-0003). Pattern commands start runs and
+ * hand worker jobs to the calling harness, which executes them with its own
+ * delegation tools and submits structured results. Every command emits an
+ * {ok, run, step, errors[]} envelope - machine shaped with --json, human
+ * text plus error lines without - and exits by class: 0 ok, 1 usage,
+ * 2 validation/gate, 3 nothing takeable, 4 internal. Each invocation
+ * appends start/end lines to .fusion/commands.jsonl; a start with no end
+ * is a hung-or-killed trace.
  */
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { stdin, stdout } from "node:process";
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 import { achDefinition } from "./ach";
 import { type ClaimVerdict, validateClaim } from "./claim";
 import { delphiDefinition } from "./delphi";
-import { continueRun, executeRun, resumeRun } from "./engine";
+import {
+  abortRun,
+  type Job,
+  type PatternRebuild,
+  type RunView,
+  startRun,
+  statusOfRun,
+  submitToRun,
+} from "./engine";
 import {
   appendCommandRecord,
   commandRecordPath,
@@ -34,11 +45,24 @@ import {
 } from "./envelope";
 import { gonogoDefinition } from "./gonogo";
 import { juryDefinition } from "./jury";
-import { type PatternDefinition, type PatternOptions, resolveWait, toRegistration } from "./pattern";
+import {
+  type PatternDefinition,
+  type PatternIo,
+  type PatternOptions,
+  toRegistration,
+} from "./pattern";
 import { redblueDefinition } from "./redblue";
+import { PROVENANCE_LIMITS, type RunRegistration } from "./run";
 import { shortlistDefinition } from "./shortlist";
 import { SKILL_TEXT } from "./skill";
-import { type AggregateMethod, aggregate, type DrCitations, evidenceFromCitations, normalizeClaims, scoreForecasts } from "./tier1";
+import {
+  type AggregateMethod,
+  aggregate,
+  type DrCitations,
+  evidenceFromCitations,
+  normalizeClaims,
+  scoreForecasts,
+} from "./tier1";
 
 const VERSION = "0.2.2"; // x-release-please-version
 
@@ -186,19 +210,47 @@ function parseOutcomeArray(text: string): { confidence: number; outcome: boolean
 }
 
 function emitParserError(error: unknown): void {
-  const command = process.argv[2] ?? "fusion";
+  const raw = process.argv[2];
+  const command = raw === undefined || raw.startsWith("-") ? "fusion" : raw;
+  const detail =
+    error instanceof CommanderError && error.code === "commander.help"
+      ? "a fusion command is required; run fusion --help"
+      : error instanceof Error
+        ? error.message
+        : String(error);
   const run = newRunId();
   resolved = { run, step: "argv" };
   appendCommandRecord(COMMAND_RECORD, startRecord(command, run));
-  const envelope = envelopeFail(run, "argv", [
-    {
-      code: "E106",
-      detail: error instanceof Error ? error.message : String(error),
-    },
-  ]);
-  printEnvelope(envelope, false);
+  const envelope = envelopeFail(run, "argv", [{ code: "E106", detail }]);
+  printEnvelope(envelope, process.argv.includes("--json"));
   appendCommandRecord(COMMAND_RECORD, endRecord(command, run, envelope));
-  process.exitCode = 1;
+  process.exitCode = exitCodeForErrors(envelope.errors);
+}
+
+/**
+ * One parser-error surface for every command (ADR-0002): commander's
+ * usage errors - unknown command, unknown option, missing required
+ * flags, a bare invocation - route through the standard E106 envelope,
+ * machine-shaped with --json. Explicit help and version keep
+ * commander's own exit 0 (the override returns and commander exits
+ * after its synchronous help/version output).
+ */
+function ownParserErrors(program: Command): void {
+  const override = (error: CommanderError): void => {
+    if (
+      error.code === "commander.version" ||
+      error.code === "commander.helpDisplayed" ||
+      (error.code === "commander.help" && error.exitCode === 0)
+    ) {
+      return;
+    }
+    emitParserError(error);
+  };
+  const output = { writeErr: () => {}, writeOut: (str: string) => stdout.write(str) };
+  program.exitOverride(override).configureOutput(output);
+  for (const command of program.commands) {
+    command.exitOverride(override).configureOutput(output);
+  }
 }
 
 const program = new Command();
@@ -406,29 +458,154 @@ const PATTERNS: readonly PatternDefinition[] = [
   gonogoDefinition,
 ];
 
+/**
+ * Read the evidence file once so the run freezes exactly the content the
+ * build consumed (ADR-0003: later stages never depend on a mutable
+ * external file).
+ */
+function snapshotEvidence(
+  options: PatternOptions,
+): { error: string } | { snapshot?: { path: string; content: string } } {
+  const raw = options["evidence"];
+  if (raw === undefined) {
+    return {};
+  }
+  const path = String(raw);
+  if (path.trim().length === 0) {
+    return { error: "--evidence requires a file path" };
+  }
+  try {
+    return { snapshot: { content: readFileSync(path, "utf8"), path } };
+  } catch (error) {
+    return {
+      error: `--evidence cannot read ${path}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+function ioOfSnapshot(
+  snapshot: { path: string; content: string } | undefined,
+): PatternIo | undefined {
+  if (snapshot === undefined) {
+    return undefined;
+  }
+  return { readEvidence: () => snapshot.content };
+}
+
+/** Rebuild a run's pattern stages from the frozen registration. */
+function rebuildFromRegistration(reg: RunRegistration): ReturnType<PatternRebuild> {
+  const definition = PATTERNS.find((d) => d.command === reg.pattern);
+  if (definition === undefined) {
+    return { error: `unknown pattern "${reg.pattern}" in run record` };
+  }
+  const built = definition.build(reg.patternOptions ?? {}, ioOfSnapshot(reg.evidenceSnapshot));
+  if ("error" in built) {
+    return { error: built.error };
+  }
+  return {
+    ...(built.stages !== undefined ? { stages: built.stages } : {}),
+    validateSubmission: built.validateSubmission,
+    fuse: built.fuse,
+  };
+}
+
+function jobBriefLine(job: Job): string {
+  return `job      ${JSON.stringify(job)}`;
+}
+
+function pendingLines(view: RunView): readonly string[] {
+  const jobs = view.jobs ?? [];
+  const lines = [
+    `run      ${view.runId} (${view.runDir})`,
+    "status   pending",
+    `isolation ${PROVENANCE_LIMITS.isolation}`,
+    `identity  ${PROVENANCE_LIMITS.identity}`,
+    `submit    fusion submit --run ${view.runId} --job <jobId> <submission.json> (or stdin)`,
+    `jobs      ${jobs.length} pending`,
+  ];
+  for (const job of jobs) {
+    lines.push(jobBriefLine(job));
+  }
+  return lines;
+}
+
+function terminalLines(view: RunView): readonly string[] {
+  const decision = view.decision ?? {};
+  const lines = [
+    `run      ${view.runId} (${view.runDir})`,
+    `status   ${view.status}`,
+    `cause    ${String(decision["cause"] ?? "(none)")}`,
+  ];
+  if (typeof decision["reason"] === "string") {
+    lines.push(`reason   ${decision["reason"]}`);
+  }
+  const patternName = decision["pattern"];
+  const definition =
+    typeof patternName === "string" ? PATTERNS.find((d) => d.command === patternName) : undefined;
+  if (definition !== undefined && decision["cause"] === "clean") {
+    lines.push(
+      ...definition.summarize(decision, {
+        cause: "clean",
+        decision,
+        runDir: view.runDir,
+        runId: view.runId,
+      }),
+    );
+  } else {
+    const failures = decision["failures"] as { class: string; workerId: string }[] | undefined;
+    if ((failures?.length ?? 0) > 0) {
+      lines.push(`failures ${JSON.stringify(failures)}`);
+    }
+    if (typeof decision["note"] === "string") {
+      lines.push(`note     ${decision["note"]}`);
+    }
+  }
+  lines.push(`isolation ${PROVENANCE_LIMITS.isolation}`, `identity  ${PROVENANCE_LIMITS.identity}`);
+  return lines;
+}
+
+function viewPayload(view: RunView): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    limitations: PROVENANCE_LIMITS,
+    lines: view.status === "pending" ? pendingLines(view) : terminalLines(view),
+    runDir: view.runDir,
+    runId: view.runId,
+    status: view.status,
+  };
+  if (view.status === "pending") {
+    payload.jobs = view.jobs ?? [];
+  } else {
+    payload.decision = view.decision ?? {};
+  }
+  return payload;
+}
+
+function viewOfErrors(
+  run: string,
+  step: string,
+  errors: readonly { code: string; detail: string }[],
+): {
+  envelope: Envelope;
+} {
+  return { envelope: envelopeFail(run, step, errors) };
+}
+
 for (const definition of PATTERNS) {
   const command = program
     .command(definition.command)
     .description(`${definition.description} ${EXIT_HELP_TEXT}`)
-    .option("--json", "emit the machine-shaped envelope with the decision record")
-    .exitOverride((error) => {
-      if (
-        error.code === "commander.help" ||
-        error.code === "commander.helpDisplayed" ||
-        error.code === "commander.version"
-      ) {
-        return;
-      }
-      emitParserError(error);
-    })
-    .configureOutput({ writeErr: () => {}, writeOut: (str) => stdout.write(str) });
+    .option("--json", "emit the machine-shaped envelope with the run handoff");
   for (const spec of definition.options) {
     if (spec.flag === "boolean") {
       command.option(`--${spec.name}`, spec.description);
       continue;
     }
     const flag = `--${spec.name} <${spec.name}>`;
-    if (spec.required === true) {
+    if (spec.name === "roster") {
+      command.option(flag, spec.description, (value: string, previous: string | undefined) =>
+        previous === undefined ? value : `${previous},${value}`,
+      );
+    } else if (spec.required === true) {
       command.requiredOption(flag, spec.description);
     } else if (spec.default !== undefined) {
       command.option(flag, spec.description, spec.default);
@@ -438,226 +615,118 @@ for (const definition of PATTERNS) {
   }
   command.action(async (options: PatternOptions) => {
     await runCommand(definition.command, options["json"] === true, async (run) => {
-      const build = definition.build(options);
+      const evidenced = snapshotEvidence(options);
+      if ("error" in evidenced) {
+        return viewOfErrors(run, "build", [{ code: "E102", detail: evidenced.error }]);
+      }
+      const snapshot = evidenced.snapshot;
+      const build = definition.build(options, ioOfSnapshot(snapshot));
       if ("error" in build) {
-        return {
-          envelope: envelopeFail(run, "build", [{ code: "E102", detail: build.error }]),
-        };
+        return viewOfErrors(run, "build", [{ code: "E102", detail: build.error }]);
       }
-      resolved = { run, step: "executeRun" };
+      resolved = { run, step: "startRun" };
       const patternRunId = `r${randomUUID().replace(/-/g, "").slice(0, 8)}`;
-      const waited = resolveWait(options, () => new Date().toISOString());
-      if ("error" in waited) {
-        return {
-          envelope: envelopeFail(run, "build", [{ code: "E102", detail: waited.error }]),
-        };
-      }
       const registration = toRegistration(build, definition.command, {
+        ...(snapshot !== undefined ? { evidenceSnapshot: snapshot } : {}),
         now: () => new Date().toISOString(),
         patternOptions: { ...options },
         runId: patternRunId,
-        ...(waited.wait === true ? { wait: true as const } : {}),
-        ...(waited.waitUntil !== undefined ? { waitUntil: waited.waitUntil } : {}),
       });
-      const report = executeRun(registration, {
-        ...(build.stages !== undefined ? { stages: build.stages } : {}),
-        fuse: build.fuse,
-        repoRoot: process.cwd(),
-      });
-      const payload = {
-        decision: report.decision,
-        lines: definition.summarize(report.decision, report),
-        runDir: report.runDir,
-      };
-      if (report.cause === "suspended") {
-        const pending = (report.decision["pendingQuestions"] ?? []) as { workerId: string }[];
-        return {
-          envelope: envelopeFail(run, "executeRun", [
-            {
-              code: "E303",
-              detail: `pattern run ${patternRunId} suspended with ${pending.length} pending questions; resume with fusion resume --run ${patternRunId} --worker <id> --answer <text>; record at ${report.runDir}`,
-            },
-          ]),
-          payload,
-        };
+      const started = startRun(registration, { repoRoot: process.cwd() });
+      if ("error" in started) {
+        return viewOfErrors(run, "startRun", [started.error]);
       }
-      if (report.cause !== "clean") {
-        return {
-          envelope: envelopeFail(run, "executeRun", [
-            {
-              code: "E301",
-              detail: `pattern run ${patternRunId} failed with no surviving workers; record at ${report.runDir}`,
-            },
-          ]),
-          payload,
-        };
-      }
-      return { envelope: envelopeOk(run), payload };
+      return { envelope: envelopeOk(run), payload: viewPayload(started.view) };
     });
   });
 }
 
 program
-  .command("resume")
+  .command("submit")
   .description(
-    "Answer one pending worker question and continue a suspended --wait run. " + EXIT_HELP_TEXT,
+    "Submit one worker job result: a success {claims, identity} or a failure {failure}. " +
+      "Returns the run's remaining jobs or its decision. " +
+      EXIT_HELP_TEXT,
   )
-  .requiredOption("--run <runId>", "suspended run id (r........)")
-  .requiredOption("--worker <workerId>", "worker with the pending question")
-  .requiredOption("--answer <text>", "answer passed verbatim to the worker hcn session")
-  .option("--abort", "fail the suspended run explicitly instead of answering")
-  .option("--json", "emit the machine-shaped envelope with the decision record")
+  .requiredOption("--run <runId>", "panel run id (r........)")
+  .requiredOption("--job <jobId>", "job id from the run handoff (e.g. generate:w1)")
+  .argument("[file]", "submission JSON file; reads stdin when omitted")
+  .option("--json", "emit the machine-shaped envelope with the run handoff")
   .action(
-    async (options: {
-      run: string;
-      worker: string;
-      answer?: string;
-      abort?: boolean;
-      json?: boolean;
-    }) => {
-      await runCommand("resume", options.json === true, async (run) => {
-        const repoRoot = process.cwd();
-        const runDir = `${repoRoot}/.fusion/runs/${options.run}`;
-        if (options.abort === true) {
-          const { appendFileSync, readFileSync, writeFileSync } = await import("node:fs");
-          const { join } = await import("node:path");
-          let stored: Record<string, unknown>;
-          try {
-            stored = JSON.parse(readFileSync(join(runDir, "run.json"), "utf8")) as Record<
-              string,
-              unknown
-            >;
-          } catch {
-            return {
-              envelope: envelopeFail(run, "resume", [
-                { code: "E102", detail: `unknown run "${options.run}"` },
-              ]),
-            };
-          }
-          if (stored["suspended"] === undefined) {
-            return {
-              envelope: envelopeFail(run, "resume", [
-                { code: "E102", detail: `run "${options.run}" is not suspended` },
-              ]),
-            };
-          }
-          const at = new Date().toISOString();
-          appendFileSync(
-            join(runDir, "events.ndjson"),
-            `${JSON.stringify({ at, kind: "stage", payload: { stage: "FAILED" }, runId: options.run, schemaVersion: "fusion/v0" })}\n`,
-          );
-          appendFileSync(
-            join(runDir, "events.ndjson"),
-            `${JSON.stringify({ at, kind: "done", payload: { cause: "aborted" }, runId: options.run, schemaVersion: "fusion/v0" })}\n`,
-          );
-          writeFileSync(
-            join(runDir, "decision.json"),
-            `${JSON.stringify({ cause: "aborted", runId: options.run }, null, 2)}\n`,
-          );
-          const payload = {
-            decision: { cause: "aborted", runId: options.run },
-            lines: [`aborted  ${options.run} (${runDir})`],
-            runDir,
-          };
-          return { envelope: envelopeOk(run), payload };
+    async (file: string | undefined, options: { run: string; job: string; json?: boolean }) => {
+      await runCommand("submit", options.json === true, async (run) => {
+        let text: string;
+        try {
+          text = await readInput(file);
+        } catch (error) {
+          return viewOfErrors(run, "input", [
+            {
+              code: "E103",
+              detail: `cannot read input: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ]);
         }
-        if (options.answer === undefined) {
-          return {
-            envelope: envelopeFail(run, "resume", [
-              { code: "E102", detail: "--answer is required unless --abort is set" },
-            ]),
-          };
-        }
-        if (!/^r[0-9a-f]{8}$/.test(options.run) || /\.\.|\//.test(options.run)) {
-          return {
-            envelope: envelopeFail(run, "resume", [
-              { code: "E102", detail: `unknown run "${options.run}"` },
-            ]),
-          };
-        }
-        if (!/^w[a-z0-9-]+$/.test(options.worker)) {
-          return {
-            envelope: envelopeFail(run, "resume", [
-              { code: "E102", detail: `unknown worker "${options.worker}"` },
-            ]),
-          };
-        }
-        resolved = { run, step: "resumeRun" };
-        const answered = resumeRun(repoRoot, options.run, options.worker, options.answer, {});
-        if ("error" in answered) {
-          return {
-            envelope: envelopeFail(run, "resumeRun", [
-              { code: "E102", detail: answered.error },
-            ]),
-          };
-        }
-        const { resumed } = answered;
-        if (resumed.remaining > 0 || resumed.askedAgain) {
-          const lines = [
-            `run      ${resumed.runId} (${repoRoot}/.fusion/runs/${resumed.runId})`,
-            `answered ${resumed.answeredWorker.workerId} (${resumed.acceptedClaims} claims accepted)`,
-            resumed.remaining > 0
-              ? `pending  ${resumed.remaining} questions still open`
-              : `pending  worker asked again; answer with fusion resume`,
-          ];
-          return {
-            envelope: envelopeFail(run, "resumeRun", [
-              {
-                code: "E303",
-                detail: `run ${resumed.runId} still suspended; ${resumed.remaining} pending questions`,
-              },
-            ]),
-            payload: { decision: { ...resumed }, lines, runDir },
-          };
-        }
-        resolved = { run, step: "continueRun" };
-        const definition = PATTERNS.find((d) => d.command === resumed.pattern);
-        if (definition === undefined) {
-          return {
-            envelope: envelopeFail(run, "continueRun", [
-              { code: "E499", detail: `unknown pattern "${resumed.pattern}" in run record` },
-            ]),
-          };
-        }
-        const stored = JSON.parse(
-          readFileSync(`${repoRoot}/.fusion/runs/${options.run}/run.json`, "utf8"),
-        ) as {
-          patternOptions?: Record<string, string | boolean>;
-        };
-        const rebuilt = definition.build({
-          ...(stored.patternOptions ?? {}),
-          json: false,
+        resolved = { run, step: "submit" };
+        const outcome = submitToRun(process.cwd(), options.run, options.job, text, {
+          rebuild: rebuildFromRegistration,
+          repoRoot: process.cwd(),
         });
-        if ("error" in rebuilt) {
-          return {
-            envelope: envelopeFail(run, "continueRun", [
-              { code: "E499", detail: `cannot rebuild pattern "${resumed.pattern}": ${rebuilt.error}` },
-            ]),
-          };
+        if (outcome.errors !== undefined) {
+          return viewOfErrors(run, "submit", outcome.errors);
         }
-        const continued = continueRun(repoRoot, options.run, {
-          ...(rebuilt.stages !== undefined ? { stages: rebuilt.stages } : {}),
-          fuse: rebuilt.fuse,
-          repoRoot,
-        });
-        if ("error" in continued) {
-          return {
-            envelope: envelopeFail(run, "continueRun", [
-              { code: "E499", detail: continued.error },
-            ]),
-          };
+        if (outcome.view === undefined) {
+          return viewOfErrors(run, "submit", [
+            { code: "E499", detail: "no result from submission" },
+          ]);
         }
-        return {
-          envelope: envelopeOk(run),
-          payload: {
-            decision: continued.report.decision,
-            lines: definition.summarize(continued.report.decision, continued.report),
-            runDir: continued.report.runDir,
-          },
-        };
+        return { envelope: envelopeOk(run), payload: viewPayload(outcome.view) };
       });
     },
   );
+
+program
+  .command("status")
+  .description(
+    "Show a run's pending jobs or its terminal decision, across invocations. " + EXIT_HELP_TEXT,
+  )
+  .requiredOption("--run <runId>", "panel run id (r........)")
+  .option("--json", "emit the machine-shaped envelope with the run handoff")
+  .action(async (options: { run: string; json?: boolean }) => {
+    await runCommand("status", options.json === true, async (run) => {
+      const outcome = statusOfRun(process.cwd(), options.run);
+      if (outcome.errors !== undefined) {
+        return viewOfErrors(run, "status", outcome.errors);
+      }
+      if (outcome.view === undefined) {
+        return viewOfErrors(run, "status", [{ code: "E499", detail: "no result from status" }]);
+      }
+      return { envelope: envelopeOk(run), payload: viewPayload(outcome.view) };
+    });
+  });
+
+program
+  .command("abort")
+  .description(
+    "Abort a pending run, recording a failed terminal decision with your reason. " + EXIT_HELP_TEXT,
+  )
+  .requiredOption("--run <runId>", "panel run id (r........)")
+  .requiredOption("--reason <text>", "why the run is aborted; kept in the decision record")
+  .option("--json", "emit the machine-shaped envelope with the run handoff")
+  .action(async (options: { run: string; reason: string; json?: boolean }) => {
+    await runCommand("abort", options.json === true, async (run) => {
+      resolved = { run, step: "abort" };
+      const outcome = abortRun(process.cwd(), options.run, options.reason, {
+        repoRoot: process.cwd(),
+      });
+      if (outcome.errors !== undefined) {
+        return viewOfErrors(run, "abort", outcome.errors);
+      }
+      if (outcome.view === undefined) {
+        return viewOfErrors(run, "abort", [{ code: "E499", detail: "no result from abort" }]);
+      }
+      return { envelope: envelopeOk(run), payload: viewPayload(outcome.view) };
+    });
+  });
 
 program
   .command("skill")
@@ -666,18 +735,7 @@ program
     stdout.write(SKILL_TEXT);
   });
 
-program
-  .exitOverride((error) => {
-    if (
-      error.code === "commander.help" ||
-      error.code === "commander.helpDisplayed" ||
-      error.code === "commander.version"
-    ) {
-      return;
-    }
-    emitParserError(error);
-  })
-  .configureOutput({ writeErr: () => {}, writeOut: (str) => stdout.write(str) });
+ownParserErrors(program);
 
 program.parseAsync(process.argv).catch((error: unknown) => {
   reportCrash("parseAsync", error, CRASH_OPTIONS);

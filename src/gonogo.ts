@@ -1,12 +1,13 @@
 import type { AcceptedClaim, FusedOutput, RunReport } from "./engine";
 import {
+  checkRoleClaims,
+  DEFAULT_HARNESS_HINT,
   diversityCounts,
+  HARNESS_OPTION,
   type PatternDefinition,
   type PatternOptions,
-  resolveRoster,
-  WAIT_OPTION,
-  WAIT_SEC_OPTION,
   ROSTER_OPTION,
+  resolveRoster,
 } from "./pattern";
 
 export const GONOGO_MIN_REVIEWERS = 2;
@@ -128,10 +129,17 @@ export const gonogoDefinition: PatternDefinition = {
     const roster = rostered.roster;
     return {
       fuse: gonogoFuse,
-      stoppingRule: "every reviewer returns one position or times out",
+      validateSubmission(_job, claims) {
+        return checkRoleClaims(claims, {
+          kinds: ["answer"],
+          count: { min: 1, max: 1 },
+          actions: { required: true, allowed: ["accept", "test", "escalate", "abstain"] },
+        });
+      },
+      stoppingRule: "every reviewer returns one position or the caller reports its failure",
       task,
       workers: Array.from({ length: reviewers }, (_, index) => {
-        const slot = roster[index] ?? { harness: "pi" };
+        const slot = roster[index] ?? { harness: DEFAULT_HARNESS_HINT };
         return {
           harness: slot.harness,
           ...(slot.model !== undefined ? { model: slot.model } : {}),
@@ -146,18 +154,16 @@ export const gonogoDefinition: PatternDefinition = {
   description:
     "Go/No-Go gate: independent reviewers each return GO, GO WITH CONSTRAINT, or " +
     "NO-GO; the mechanical veto rule is that any NO-GO blocks - no outvoting. " +
-    "Writes .fusion/runs/<runId>/.",
+    "Starts a caller-managed run and returns the first wave of jobs.",
   options: [
-    WAIT_OPTION,
-    WAIT_SEC_OPTION,
     {
       default: String(GONOGO_DEFAULT_REVIEWERS),
       description: "number of independent reviewers",
       name: "reviewers",
     },
-    { default: "pi", description: "harness for every reviewer (hcn name)", name: "harness" },
-    { description: "model id passed to every reviewer", name: "model" },
-    { default: "300", description: "per-reviewer wall-clock budget in seconds", name: "timeout" },
+    HARNESS_OPTION,
+    { description: "model hint passed to every reviewer", name: "model" },
+    { default: "300", description: "per-reviewer advisory budget in seconds", name: "timeout" },
     ROSTER_OPTION,
     { description: "the decision or artifact being gated", name: "task", required: true },
   ],

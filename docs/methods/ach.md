@@ -1,6 +1,6 @@
 # ACH Matrix
 
-`fusion ach --task <t> [--workers N] [--harness pi] [--model <m>] [--timeout <sec>] [--evidence <file>] [--json]`
+`fusion ach --task <t> [--workers N] [--timeout <sec>] [--evidence <file>] [--harness <hint>] [--model <hint>] [--roster <harness:model>] [--json]`
 
 ## What it is for
 
@@ -14,10 +14,15 @@ The discipline ACH enforces: every hypothesis gets checked against every
 piece of evidence - the step humans skip when cherry-picking support for a
 favorite explanation.
 
-## Mechanics
+## Mechanics (caller-managed, ADR-0003)
 
-1. Each sealed analyst files hypotheses (`kind=hypothesis`, each citing
-   its evidence via `dependencies`) and evidence claims (each linking the
+The command starts the run and returns all analyst jobs in one wave;
+the caller executes each with its own delegation tools and submits
+results with `fusion submit` (`{claims, identity}` or `{failure}`).
+Isolation between analysts is caller-enforced.
+
+1. Each analyst files one to three hypotheses (`kind=hypothesis`, each citing
+   its evidence via `dependencies`) and one to three evidence claims (each linking the
    hypotheses it bears on via `dependencies`, with `novelty`:
    `confirms` = consistent, `contradicts` = inconsistent). With
    `--evidence`, the prompt carries researched sources from a dr citations
@@ -26,8 +31,11 @@ favorite explanation.
 2. A matrix cell (hypothesis, evidence) is consistent or inconsistent only
    when the link is bidirectional: the evidence names the hypothesis and
    the hypothesis cites the evidence. Otherwise the cell is `unlinked`.
-3. ACH strictness at the pattern stage: a hypothesis with no evidence
-   dependencies is rejected; so is evidence that links no hypothesis.
+3. The submission boundary enforces these counts and links. A hypothesis
+   must cite evidence, and evidence must cite hypotheses. Evidence novelty
+   must be `confirms` or `contradicts`; the generic schema's `new` and
+   `duplicates` values are not consistency judgments for this role.
+   Violations return E201 and leave the job pending for correction.
 4. Classification:
    - **diagnostic** - evidence bearing on a proper subset of hypotheses
      (it supports some over the rest, or counts against one)
@@ -43,21 +51,30 @@ favorite explanation.
 
 - `hypotheses`, `matrix` (every cell with its consistency), `leastDisconfirmed`
 - `diagnosticEvidence`, `consistentWithAll`
-- `rejectedClaims` (pattern-strictness rejections), `residualRisks`
-  (the winner's falsifier)
+- `rejectedClaims` (retained fusion diagnostics, normally empty after the
+  role boundary validates submissions), `residualRisks` (the winner's
+  falsifier). Submission rejections are immediate E201 errors, not
+  claims accepted into this record.
 
 ## Guarantees and limits
 
 - Guaranteed: the matrix is mechanical - no model scores consistency;
   run-scoped ids keep sealed analysts' same-numbered claims apart; a
-  worker whose claims are rejected gets one retry with the validator
-  errors fed back - a second rejection is final for the run.
+  rejected submission leaves the run unchanged - the caller corrects
+  the claims (the E201 lines name the fields) and resubmits the same
+  job.
 - Limits: sealed analysts cannot cross-cite, so with N workers the merged
   matrix is block-diagonal - each analyst's evidence bears only on their
   own hypotheses, and every item is "diagnostic" against the union. Cross-
   worker synthesis is tier 2 model work, deliberately absent.
 
+Identity is caller-reported and isolation is caller-enforced. The decision's
+`provenanceLimits` records both limits. Opaque worker slots remain visible in
+claim references, but harness, model and session metadata are removed from
+later-stage records.
+
 ## Run artifacts
 
-`.fusion/runs/<runId>/` - `run.json`, `events.ndjson`, `decision.json`
-(the matrix lives in both the fusion event and the record).
+`.fusion/runs/<runId>/` - `run.json` (frozen registration with the
+evidence snapshot), `state.json`, `events.ndjson`, `decision.json` (the
+matrix lives in both the fusion event and the record).

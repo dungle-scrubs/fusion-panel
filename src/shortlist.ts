@@ -1,12 +1,14 @@
 import type { AcceptedClaim, FusedOutput, RunReport, StageInput } from "./engine";
 import {
+  checkClaimReferences,
+  checkRoleClaims,
+  DEFAULT_HARNESS_HINT,
   diversityCounts,
+  HARNESS_OPTION,
   type PatternDefinition,
   type PatternOptions,
-  resolveRoster,
-  WAIT_OPTION,
-  WAIT_SEC_OPTION,
   ROSTER_OPTION,
+  resolveRoster,
 } from "./pattern";
 import { canonicalize } from "./tier1";
 
@@ -47,8 +49,8 @@ export function judgePrompt(task: string, rubric: string): (input: StageInput) =
       '- kind: "answer"',
       "- claim: your one-sentence note on this option against the rubric",
       "- dependencies: [the option's id exactly as listed below]",
-      '- requested_action: "accept" (advance) | "revise" (advance with the',
-      '  required change named in your note) | "abstain" (drop) |',
+      '- requested_action: "accept" (advance) | "revise" (request a change',
+      '  in your note; not an accept vote) | "abstain" (drop) |',
       '  "escalate" (needs a human decision)',
       '- status ("observed"|"documented"|"inferred"|"unknown"), confidence [0,1],',
       "  falsifier",
@@ -249,7 +251,7 @@ export const shortlistDefinition: PatternDefinition = {
     }
     const roster = rostered.roster;
     const slotOf = (index: number): { harness: string; model?: string } =>
-      roster[index] ?? { harness: "pi" };
+      roster[index] ?? { harness: DEFAULT_HARNESS_HINT };
     const base = (index: number): { harness: string; model?: string; timeoutSec: number } => {
       const slot = slotOf(index);
       return {
@@ -260,6 +262,32 @@ export const shortlistDefinition: PatternDefinition = {
     };
     return {
       fuse: shortlistFuse,
+      validateSubmission(job, claims, accepted) {
+        if (job.stage === "generate") {
+          return checkRoleClaims(claims, {
+            kinds: ["answer"],
+            count: { min: 1, max: 3 },
+            actions: { required: false },
+          });
+        }
+        const options = new Set(
+          accepted
+            .filter((entry) => entry.stage === "generate" && entry.claim.kind === "answer")
+            .map((entry) => String(entry.claim.claim_id)),
+        );
+        return [
+          ...checkRoleClaims(claims, {
+            kinds: ["answer"],
+            count: { min: options.size, max: options.size },
+            actions: { required: true, allowed: ["accept", "revise", "abstain", "escalate"] },
+          }),
+          ...checkClaimReferences(claims, options, {
+            singleTarget: true,
+            uniqueTargets: true,
+            coverAll: true,
+          }),
+        ];
+      },
       rubric,
       stages: {
         challenge: (input: StageInput) =>
@@ -269,7 +297,8 @@ export const shortlistDefinition: PatternDefinition = {
             workerId: `w-judge-${index + 1}`,
           })),
       },
-      stoppingRule: "proposers file options; every judge scores every option against the rubric",
+      stoppingRule:
+        "proposers file options; every judge scores every option against the rubric; the caller executes each job or reports its failure",
       task,
       workers: Array.from({ length: generators }, (_, index) => ({
         ...base(index),
@@ -282,11 +311,9 @@ export const shortlistDefinition: PatternDefinition = {
   description:
     "Shortlist pattern run: sealed proposers generate options; blind judges score " +
     "every option against the rubric (accept/revise/abstain/escalate); the tool tallies " +
-    "mechanically and ranks the majority-accept shortlist. Writes .fusion/runs/<runId>/. " +
-    "Exits 0 clean, 1 run failure, 2 invalid invocation.",
+    "mechanically and ranks the majority-accept shortlist. Starts a caller-managed run " +
+    "and returns the first wave of jobs. Exit codes follow the shared command contract.",
   options: [
-    WAIT_OPTION,
-    WAIT_SEC_OPTION,
     {
       default: String(SHORTLIST_DEFAULT_GENERATORS),
       description: "number of sealed proposers",
@@ -297,9 +324,9 @@ export const shortlistDefinition: PatternDefinition = {
       description: "number of blind judges",
       name: "judges",
     },
-    { default: "pi", description: "harness for every worker (hcn name)", name: "harness" },
-    { description: "model id passed to every worker", name: "model" },
-    { default: "300", description: "per-worker wall-clock budget in seconds", name: "timeout" },
+    HARNESS_OPTION,
+    { description: "model hint passed to every worker", name: "model" },
+    { default: "300", description: "per-worker advisory budget in seconds", name: "timeout" },
     ROSTER_OPTION,
     { description: "the standard every option is scored against", name: "rubric", required: true },
     {

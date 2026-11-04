@@ -1,15 +1,18 @@
 import { readFileSync } from "node:fs";
 import type { AcceptedClaim, FusedOutput, RunReport, StageInput } from "./engine";
 import {
+  checkClaimReferences,
+  checkRoleClaims,
+  DEFAULT_HARNESS_HINT,
   diversityCounts,
   EVIDENCE_OPTION,
+  HARNESS_OPTION,
   type PatternDefinition,
+  type PatternIo,
   type PatternOptions,
+  ROSTER_OPTION,
   resolveEvidence,
   resolveRoster,
-  ROSTER_OPTION,
-  WAIT_OPTION,
-  WAIT_SEC_OPTION,
 } from "./pattern";
 import type { WorkerConfig } from "./run";
 
@@ -71,7 +74,7 @@ export function opponentPrompt(input: StageInput): string {
     "record ids only in dependencies.",
     'kind: "objection", claim (the objection, one sentence), status',
     '("observed"|"documented"|"inferred"|"unknown"), confidence [0,1],',
-    "falsifier, and dependencies: the claim_id(s) you target.",
+    "falsifier, and dependencies: [exactly one claimant claim_id you target].",
     "Do NOT include a provenance field.",
     "Reply with one JSON object per objection, nothing else.",
   ].join("\n");
@@ -94,7 +97,7 @@ export function umpirePrompt(input: StageInput): string {
     "record ids only in dependencies.",
     'kind: "evidence", claim (what the check or source shows), status',
     '("observed"|"documented"|"inferred"|"unknown"), confidence,',
-    "falsifier, dependencies: [the objection's claim_id], and requested_action:",
+    "falsifier, dependencies: [exactly one objection claim_id], and requested_action:",
     '  "accept" = objection sustained (target claim falls),',
     '  "revise" = objection overruled (target claim survives),',
     '  "test"   = check inconclusive.',
@@ -106,19 +109,20 @@ export function umpirePrompt(input: StageInput): string {
 export function judgePrompt(burden: string, input: StageInput): string {
   return [
     "You are the judge in a red-blue adversarial review.",
-    "You see the anonymized record: claims, objections, and umpire rulings.",
-    "Worker identity and model are hidden from you; judge the record only.",
+    "You see the anonymized record: claims and objections.",
+    "The umpire works in the same wave; you do not see its rulings.",
+    "Harness, model, and session metadata are hidden from you; role IDs remain visible.",
     `BURDEN: ${burden}`,
     "",
     "RECORD (one JSON per line):",
     claimsBlock(input.anonymizedClaims),
     "",
-    "Score the SURVIVING claims against the burden and reply with EXACTLY ONE",
+    "Assess the claims and objections against the burden and reply with EXACTLY ONE",
     'JSON object: claim_id "C1", kind "answer", claim (the ruling, one to three',
     "sentences naming what survives and what does not), status",
     '("observed"|"documented"|"inferred"|"unknown"), confidence [0,1],',
     "falsifier, requested_action: accept | revise | escalate | abstain",
-    "(accept = the surviving record meets the burden).",
+    "(accept = the claims and objections you saw meet the burden).",
     "Do NOT include a provenance field.",
   ].join("\n");
 }
@@ -138,7 +142,9 @@ export function redblueWorkers(
       ...(options.model !== undefined ? { model: options.model } : {}),
     };
   };
-  const base = (role: keyof RedBlueRoster): { harness: string; model?: string; timeoutSec: number } => ({
+  const base = (
+    role: keyof RedBlueRoster,
+  ): { harness: string; model?: string; timeoutSec: number } => ({
     ...slot(role),
     timeoutSec: options.timeoutSec,
   });
@@ -146,7 +152,9 @@ export function redblueWorkers(
     return [{ ...base("blue"), prompt: opponentPrompt(input), workerId: "w-blue" }];
   }
   return [
-    { ...base("umpire"), prompt: umpirePrompt(input), workerId: "w-umpire" },
+    ...(input.anonymizedClaims.some((claim) => claim.kind === "objection")
+      ? [{ ...base("umpire"), prompt: umpirePrompt(input), workerId: "w-umpire" }]
+      : []),
     { ...base("judge"), prompt: judgePrompt(options.burden, input), workerId: "w-judge" },
   ];
 }
@@ -251,7 +259,7 @@ export function redblueFuse(accepted: readonly AcceptedClaim[]): FusedOutput {
 }
 
 export const redblueDefinition: PatternDefinition = {
-  build(options: PatternOptions) {
+  build(options: PatternOptions, io?: PatternIo) {
     const task = String(options["task"] ?? "");
     const burden = String(options["burden"] ?? "");
     if (task.trim().length === 0 || burden.trim().length === 0) {
@@ -261,7 +269,7 @@ export const redblueDefinition: PatternDefinition = {
     if (!(timeout > 0)) {
       return { error: "--timeout must be positive seconds" };
     }
-    const harness = String(options["harness"] ?? "pi");
+    const harness = String(options["harness"] ?? DEFAULT_HARNESS_HINT);
     const model = options["model"] === undefined ? undefined : String(options["model"]);
     const rostered = resolveRoster(options, 4);
     if ("error" in rostered) {
@@ -274,12 +282,13 @@ export const redblueDefinition: PatternDefinition = {
       { harness: string; model?: string },
     ];
     const roleRoster: RedBlueRoster = {
-      blue: blue ?? { harness: "pi" },
-      judge: judge ?? { harness: "pi" },
-      red: red ?? { harness: "pi" },
-      umpire: umpire ?? { harness: "pi" },
+      blue: blue ?? { harness: DEFAULT_HARNESS_HINT },
+      judge: judge ?? { harness: DEFAULT_HARNESS_HINT },
+      red: red ?? { harness: DEFAULT_HARNESS_HINT },
+      umpire: umpire ?? { harness: DEFAULT_HARNESS_HINT },
     };
-    const evidenced = resolveEvidence(options, (path) => readFileSync(path, "utf8"));
+    const readEvidence = io?.readEvidence ?? ((path: string) => readFileSync(path, "utf8"));
+    const evidenced = resolveEvidence(options, readEvidence);
     if ("error" in evidenced) {
       return { error: evidenced.error };
     }
@@ -293,12 +302,60 @@ export const redblueDefinition: PatternDefinition = {
     };
     return {
       fuse: redblueFuse,
+      validateSubmission(job, claims, accepted) {
+        const generationTargets = new Set(
+          accepted
+            .filter((entry) => entry.stage === "generate")
+            .map((entry) => String(entry.claim.claim_id)),
+        );
+        const objections = new Set(
+          accepted
+            .filter((entry) => entry.stage === "challenge" && entry.claim.kind === "objection")
+            .map((entry) => String(entry.claim.claim_id)),
+        );
+        if (job.workerId === "w-blue")
+          return [
+            ...checkRoleClaims(claims, {
+              kinds: ["objection"],
+              count: { min: 0, max: 4 },
+              actions: { required: false },
+            }),
+            ...checkClaimReferences(claims, generationTargets, { singleTarget: true }),
+          ];
+        if (job.workerId === "w-umpire")
+          return [
+            ...checkRoleClaims(claims, {
+              kinds: ["evidence"],
+              count: { min: objections.size, max: objections.size },
+              actions: { required: true, allowed: ["accept", "revise", "test"] },
+            }),
+            ...checkClaimReferences(claims, objections, {
+              singleTarget: true,
+              uniqueTargets: true,
+              coverAll: true,
+            }),
+          ];
+        if (job.workerId === "w-judge")
+          return [
+            ...checkRoleClaims(claims, {
+              kinds: ["answer"],
+              count: { min: 1, max: 1 },
+              actions: { required: true, allowed: ["accept", "revise", "escalate", "abstain"] },
+            }),
+          ];
+        return checkRoleClaims(claims, {
+          kinds: ["answer", "evidence", "finding", "hypothesis"],
+          count: { min: 1, max: 4 },
+          actions: { required: false },
+        });
+      },
       rubric: burden,
       stages: {
         challenge: (input) => redblueWorkers(patternOptions, input, "challenge", roleRoster),
         verify: (input) => redblueWorkers(patternOptions, input, "verify", roleRoster),
       },
-      stoppingRule: "claimant files claims; opponent files objections; umpire rules; judge scores",
+      stoppingRule:
+        "claimant files claims; opponent reports objections or none; umpire rules when needed; judge assesses; the caller executes issued jobs or reports failure",
       task,
       workers: [
         {
@@ -315,18 +372,20 @@ export const redblueDefinition: PatternDefinition = {
   description:
     "Red-Blue-Umpire pattern run: a claimant files atomic claims, an opponent " +
     "challenges with objection claims, an umpire resolves source facts (running " +
-    "named executable checks), and a judge blind to worker identity scores the " +
-    "surviving record against the burden. Writes .fusion/runs/<runId>/. " +
-    "Exits 0 clean, 1 run failure, 2 invalid invocation.",
+    "named executable checks), and a judge assesses claims and objections against " +
+    "the burden without harness, model or session metadata. Starts a caller-managed run and returns " +
+    "the first wave of jobs. Exit codes follow the shared command contract.",
   options: [
-    WAIT_OPTION,
-    WAIT_SEC_OPTION,
-    { description: "the standard the surviving record must meet", name: "burden", required: true },
-    { default: "pi", description: "harness for every role (hcn name)", name: "harness" },
-    { description: "model id passed to every role", name: "model" },
+    {
+      description: "the standard for assessing claims and objections",
+      name: "burden",
+      required: true,
+    },
+    HARNESS_OPTION,
+    { description: "model hint passed to every role", name: "model" },
     {
       default: "300",
-      description: "per-role wall-clock budget in seconds (symmetric)",
+      description: "per-role advisory budget in seconds (symmetric)",
       name: "timeout",
     },
     {
