@@ -1,6 +1,6 @@
 # ACH Matrix
 
-`fusion ach --task <t> [--workers N] [--harness pi] [--model <m>] [--timeout <sec>] [--evidence <file>] [--json]`
+`fusion ach --task <t> [--workers N] [--timeout <sec>] [--evidence <file>] [--json]`
 
 ## What it is for
 
@@ -14,7 +14,12 @@ The discipline ACH enforces: every hypothesis gets checked against every
 piece of evidence - the step humans skip when cherry-picking support for a
 favorite explanation.
 
-## Mechanics
+## Mechanics (caller-managed, ADR-0003)
+
+The command starts the run and returns all analyst jobs in one wave;
+the caller executes each with its own delegation tools and submits
+results with `fusion submit` (`{claims, identity}` or `{failure}`).
+Isolation between analysts is caller-enforced.
 
 1. Each sealed analyst files hypotheses (`kind=hypothesis`, each citing
    its evidence via `dependencies`) and evidence claims (each linking the
@@ -50,8 +55,9 @@ favorite explanation.
 
 - Guaranteed: the matrix is mechanical - no model scores consistency;
   run-scoped ids keep sealed analysts' same-numbered claims apart; a
-  worker whose claims are rejected gets one retry with the validator
-  errors fed back - a second rejection is final for the run.
+  rejected submission leaves the run unchanged - the caller corrects
+  the claims (the E201 lines name the fields) and resubmits the same
+  job.
 - Limits: sealed analysts cannot cross-cite, so with N workers the merged
   matrix is block-diagonal - each analyst's evidence bears only on their
   own hypotheses, and every item is "diagnostic" against the union. Cross-
@@ -59,5 +65,6 @@ favorite explanation.
 
 ## Run artifacts
 
-`.fusion/runs/<runId>/` - `run.json`, `events.ndjson`, `decision.json`
-(the matrix lives in both the fusion event and the record).
+`.fusion/runs/<runId>/` - `run.json` (frozen registration with the
+evidence snapshot), `state.json`, `events.ndjson`, `decision.json` (the
+matrix lives in both the fusion event and the record).

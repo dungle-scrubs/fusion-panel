@@ -1,6 +1,6 @@
 # Sealed Jury
 
-`fusion jury --task <t> [--workers N] [--harness pi] [--model <m>] [--vocabulary <a,b>] [--timeout <sec>] [--json]`
+`fusion jury --task <t> [--workers N] [--vocabulary <a,b>] [--timeout <sec>] [--merge] [--json]`
 
 ## What it is for
 
@@ -12,21 +12,37 @@ For bounded questions with a known answer set, pass `--vocabulary`
 (e.g. `ship,hold`): workers answer with exactly one member verbatim and
 grouping is exact by construction.
 
-## Mechanics
+## Mechanics (caller-managed, ADR-0003)
 
-1. Every worker is a separate `hcn run` process with no shared transcript
-   and no sight of the other answers. Each replies with exactly one claim,
-   `kind=answer`, carrying its own confidence and falsifier.
-2. Pattern strictness: only `kind=answer` claims enter fusion. Anything
-   else is rejected with a reason.
-3. Tier 1 canonicalization groups equivalent answers (NFC, whitespace,
+1. The command starts a run and returns its first wave of jobs
+   (`generate:w1`...`generate:wN`) with full worker prompts, advisory
+   `timeoutSec` budgets and optional harness/model hints. The caller
+   executes each job with its own delegation tools, giving each worker
+   only its brief, and enforces worker isolation - fusion launches
+   nothing.
+2. The caller submits each job result with `fusion submit`: a success
+   (`{claims, identity}` - identity is what actually ran, caller-reported)
+   or a failure (`{failure}`). Fusion validates claims at the boundary,
+   remaps ids to run scope, and stamps provenance marked
+   `caller-reported`.
+3. Pattern strictness: only `kind=answer` claims enter fusion. Anything
+   else is rejected with a reason (E201; correct and resubmit the same
+   job).
+4. Tier 1 canonicalization groups equivalent answers (NFC, whitespace,
    casing, number formats). Near-misses stay separate - there is no
    semantic dedup in the mechanical stage.
-4. Plurality vote over the groups; ties break by first-seen order and the
-   record shows the tie. When `--vocabulary` is set, answers outside the
-   set are rejected with a named reason; each rejected worker gets one
-   retry with the validator error fed back, then the rejection stands.
-   The record carries the vocabulary.
+5. Plurality vote over the groups; ties break by definition order
+   (worker order as issued), so submission order cannot change the
+   outcome. When `--vocabulary` is set, answers outside the set are
+   rejected with a named reason. The record carries the vocabulary.
+
+With `--merge`, after the generate wave completes fusion issues one
+blind merge job (`verify:w-merge`): it sees the distinct canonical
+answers with their anonymized record ids (`w1:C1`, ...) and clusters
+paraphrases by meaning, citing those record ids in its cluster
+dependencies. The tally then runs over clusters; the record keeps
+pre-merge groups and the mapping, and a failed or unusable merge falls
+back to the unmerged tally.
 
 ## What the decision record carries
 
@@ -39,21 +55,24 @@ grouping is exact by construction.
 - `rejectedOptions` - pattern-rejected claims with reasons
 - `residualRisks` - minority answers with confidence >= 0.6 or their own
   escalate/revise vote, each with its falsifier
+- `provenanceLimits` - identity is caller-reported and isolation is
+  caller-enforced; fusion cannot verify either
 
 ## Guarantees and limits
 
-- Guaranteed: sealed processes, schema enforcement at the boundary,
-  tool-stamped provenance, replayable event stream, mechanical fusion -
-  no model in the fusion loop.
+- Guaranteed: the registration is frozen before jobs are issued; claim
+  schema enforcement at the boundary; stage barriers; the merge worker
+  sees no provenance; mechanical fusion - no model in the fusion loop;
+  replayable event stream.
 - Limits: exact-match grouping splits semantically-equal answers with
-  different wording. Pass `--merge` for a blind merge worker that clusters
-  paraphrases before tallying (the record keeps pre-merge groups and the
-  mapping); without it the tool refuses to pretend splintered groups were
-  one answer. Semantic dedup stays tier 2 model work, deliberately absent
-  from tier 1; a worker whose claims are rejected gets one retry with the
-  validator errors fed back - a second rejection is final for the run.
+  different wording - pass `--merge` for a blind merge worker; semantic
+  dedup stays model work, deliberately absent from tier 1. Isolation and
+  identity are the caller's to enforce and report; a worker whose
+  submission is rejected leaves the run unchanged and the caller may
+  correct and resubmit the same job.
 
 ## Run artifacts
 
-`.fusion/runs/<runId>/` - `run.json` (frozen registration),
-`events.ndjson` (replayable), `decision.json`.
+`.fusion/runs/<runId>/` - `run.json` (frozen registration with format
+marker), `state.json` (mutable progress), `events.ndjson`
+(append-only), `decision.json`.

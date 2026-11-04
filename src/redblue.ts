@@ -1,15 +1,16 @@
 import { readFileSync } from "node:fs";
 import type { AcceptedClaim, FusedOutput, RunReport, StageInput } from "./engine";
 import {
+  DEFAULT_HARNESS_HINT,
   diversityCounts,
   EVIDENCE_OPTION,
+  HARNESS_OPTION,
   type PatternDefinition,
+  type PatternIo,
   type PatternOptions,
+  ROSTER_OPTION,
   resolveEvidence,
   resolveRoster,
-  ROSTER_OPTION,
-  WAIT_OPTION,
-  WAIT_SEC_OPTION,
 } from "./pattern";
 import type { WorkerConfig } from "./run";
 
@@ -138,7 +139,9 @@ export function redblueWorkers(
       ...(options.model !== undefined ? { model: options.model } : {}),
     };
   };
-  const base = (role: keyof RedBlueRoster): { harness: string; model?: string; timeoutSec: number } => ({
+  const base = (
+    role: keyof RedBlueRoster,
+  ): { harness: string; model?: string; timeoutSec: number } => ({
     ...slot(role),
     timeoutSec: options.timeoutSec,
   });
@@ -251,7 +254,7 @@ export function redblueFuse(accepted: readonly AcceptedClaim[]): FusedOutput {
 }
 
 export const redblueDefinition: PatternDefinition = {
-  build(options: PatternOptions) {
+  build(options: PatternOptions, io?: PatternIo) {
     const task = String(options["task"] ?? "");
     const burden = String(options["burden"] ?? "");
     if (task.trim().length === 0 || burden.trim().length === 0) {
@@ -261,7 +264,7 @@ export const redblueDefinition: PatternDefinition = {
     if (!(timeout > 0)) {
       return { error: "--timeout must be positive seconds" };
     }
-    const harness = String(options["harness"] ?? "pi");
+    const harness = String(options["harness"] ?? DEFAULT_HARNESS_HINT);
     const model = options["model"] === undefined ? undefined : String(options["model"]);
     const rostered = resolveRoster(options, 4);
     if ("error" in rostered) {
@@ -274,12 +277,13 @@ export const redblueDefinition: PatternDefinition = {
       { harness: string; model?: string },
     ];
     const roleRoster: RedBlueRoster = {
-      blue: blue ?? { harness: "pi" },
-      judge: judge ?? { harness: "pi" },
-      red: red ?? { harness: "pi" },
-      umpire: umpire ?? { harness: "pi" },
+      blue: blue ?? { harness: DEFAULT_HARNESS_HINT },
+      judge: judge ?? { harness: DEFAULT_HARNESS_HINT },
+      red: red ?? { harness: DEFAULT_HARNESS_HINT },
+      umpire: umpire ?? { harness: DEFAULT_HARNESS_HINT },
     };
-    const evidenced = resolveEvidence(options, (path) => readFileSync(path, "utf8"));
+    const readEvidence = io?.readEvidence ?? ((path: string) => readFileSync(path, "utf8"));
+    const evidenced = resolveEvidence(options, readEvidence);
     if ("error" in evidenced) {
       return { error: evidenced.error };
     }
@@ -298,7 +302,8 @@ export const redblueDefinition: PatternDefinition = {
         challenge: (input) => redblueWorkers(patternOptions, input, "challenge", roleRoster),
         verify: (input) => redblueWorkers(patternOptions, input, "verify", roleRoster),
       },
-      stoppingRule: "claimant files claims; opponent files objections; umpire rules; judge scores",
+      stoppingRule:
+        "claimant files claims; opponent files objections; umpire rules; judge scores; the caller executes each job or reports its failure",
       task,
       workers: [
         {
@@ -316,17 +321,15 @@ export const redblueDefinition: PatternDefinition = {
     "Red-Blue-Umpire pattern run: a claimant files atomic claims, an opponent " +
     "challenges with objection claims, an umpire resolves source facts (running " +
     "named executable checks), and a judge blind to worker identity scores the " +
-    "surviving record against the burden. Writes .fusion/runs/<runId>/. " +
-    "Exits 0 clean, 1 run failure, 2 invalid invocation.",
+    "surviving record against the burden. Starts a caller-managed run and returns " +
+    "the first wave of jobs. Exits 0 on handoff or decision, 2 invalid invocation.",
   options: [
-    WAIT_OPTION,
-    WAIT_SEC_OPTION,
     { description: "the standard the surviving record must meet", name: "burden", required: true },
-    { default: "pi", description: "harness for every role (hcn name)", name: "harness" },
-    { description: "model id passed to every role", name: "model" },
+    HARNESS_OPTION,
+    { description: "model hint passed to every role", name: "model" },
     {
       default: "300",
-      description: "per-role wall-clock budget in seconds (symmetric)",
+      description: "per-role advisory budget in seconds (symmetric)",
       name: "timeout",
     },
     {

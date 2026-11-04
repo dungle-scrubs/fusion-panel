@@ -1,12 +1,12 @@
 import type { AcceptedClaim, FusedOutput, RunReport, StageInput } from "./engine";
 import {
+  DEFAULT_HARNESS_HINT,
   diversityCounts,
+  HARNESS_OPTION,
   type PatternDefinition,
   type PatternOptions,
-  resolveRoster,
-  WAIT_OPTION,
-  WAIT_SEC_OPTION,
   ROSTER_OPTION,
+  resolveRoster,
 } from "./pattern";
 import { canonicalize } from "./tier1";
 
@@ -249,7 +249,7 @@ export const shortlistDefinition: PatternDefinition = {
     }
     const roster = rostered.roster;
     const slotOf = (index: number): { harness: string; model?: string } =>
-      roster[index] ?? { harness: "pi" };
+      roster[index] ?? { harness: DEFAULT_HARNESS_HINT };
     const base = (index: number): { harness: string; model?: string; timeoutSec: number } => {
       const slot = slotOf(index);
       return {
@@ -269,7 +269,8 @@ export const shortlistDefinition: PatternDefinition = {
             workerId: `w-judge-${index + 1}`,
           })),
       },
-      stoppingRule: "proposers file options; every judge scores every option against the rubric",
+      stoppingRule:
+        "proposers file options; every judge scores every option against the rubric; the caller executes each job or reports its failure",
       task,
       workers: Array.from({ length: generators }, (_, index) => ({
         ...base(index),
@@ -282,11 +283,9 @@ export const shortlistDefinition: PatternDefinition = {
   description:
     "Shortlist pattern run: sealed proposers generate options; blind judges score " +
     "every option against the rubric (accept/revise/abstain/escalate); the tool tallies " +
-    "mechanically and ranks the majority-accept shortlist. Writes .fusion/runs/<runId>/. " +
-    "Exits 0 clean, 1 run failure, 2 invalid invocation.",
+    "mechanically and ranks the majority-accept shortlist. Starts a caller-managed run " +
+    "and returns the first wave of jobs. Exits 0 on handoff or decision, 2 invalid invocation.",
   options: [
-    WAIT_OPTION,
-    WAIT_SEC_OPTION,
     {
       default: String(SHORTLIST_DEFAULT_GENERATORS),
       description: "number of sealed proposers",
@@ -297,9 +296,9 @@ export const shortlistDefinition: PatternDefinition = {
       description: "number of blind judges",
       name: "judges",
     },
-    { default: "pi", description: "harness for every worker (hcn name)", name: "harness" },
-    { description: "model id passed to every worker", name: "model" },
-    { default: "300", description: "per-worker wall-clock budget in seconds", name: "timeout" },
+    HARNESS_OPTION,
+    { description: "model hint passed to every worker", name: "model" },
+    { default: "300", description: "per-worker advisory budget in seconds", name: "timeout" },
     ROSTER_OPTION,
     { description: "the standard every option is scored against", name: "rubric", required: true },
     {

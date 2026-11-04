@@ -1,6 +1,6 @@
 # Shortlist
 
-`fusion shortlist --task <t> --rubric <r> [--generators N] [--judges M] [--harness] [--model] [--timeout] [--json]`
+`fusion shortlist --task <t> --rubric <r> [--generators N] [--judges M] [--timeout] [--json]`
 
 ## What it is for
 
@@ -11,14 +11,20 @@ and red-blue attacks claims rather than ranking options. Shortlist fills
 that gap: sealed generation, then blind judging against a rubric you
 state up front.
 
-## Mechanics
+## Mechanics (caller-managed, ADR-0003)
+
+The command starts the run and returns the proposer jobs; the caller
+executes each with its own delegation tools and submits results with
+`fusion submit` (`{claims, identity}` or `{failure}`). The judging wave
+is issued only after every proposer job is terminal. Isolation is
+caller-enforced.
 
 1. **Proposers** (generate stage): N sealed workers each file 1-3
    self-contained options as `kind=answer` claims.
-2. **Judges** (the RFC challenge wave, used as the judging wave): M fresh
-   sealed spawns see the anonymized options - no proposer identity, no
-   model - and must score EVERY option, one verdict per option
-   (`dependencies` targeting the option's id):
+2. **Judges** (the challenge wave, used as the judging wave): M fresh
+   jobs see the anonymized options - no proposer identity, no model -
+   and must score EVERY option, one verdict per option
+   (`dependencies` targeting the option's record id):
    - `accept` - advance
    - `revise` - advance with a required change, named in the note
    - `abstain` - drop
@@ -41,15 +47,17 @@ reason), `unscored`, `residualRisks`.
 
 ## Guarantees and limits
 
-- Guaranteed: blindness by the engine's anonymized handoff; every number
-  in the tally is mechanical; judges must score every option or the gap
-  is visible.
+- Guaranteed: blindness by the engine's anonymized stage inputs; every
+  number in the tally is mechanical; judges must score every option or
+  the gap is visible; ties break by definition order, not submission
+  order.
 - Limits: judges score options as written - no clarification round (a
   revise-verdict note is the only feedback channel); one judging wave; a
-  worker whose claims are rejected gets the engine's single retry.
+  rejected submission leaves the run unchanged - correct the claims and
+  resubmit the same job.
 
 ## Run artifacts
 
 `.fusion/runs/<runId>/` - `run.json` (the rubric is frozen as the run's
-rubric), `events.ndjson` (GENERATING then CHALLENGING; for shortlist the
-challenge wave IS the judging wave), `decision.json`.
+rubric), `state.json`, `events.ndjson` (GENERATING then CHALLENGING; for
+shortlist the challenge wave IS the judging wave), `decision.json`.

@@ -1,15 +1,30 @@
 /**
- * Run registry core (RFC-01, ticket #12): state machine, run registration,
- * and the streaming event contract. Pure module: no I/O, no spawning.
+ * Run registry core (RFC-01, ticket #12; ADR-0003 caller-managed
+ * delegation): state machine, run registration, and the streaming event
+ * contract. Pure module: no I/O, no spawning, no harness execution.
  */
 
 export const SCHEMA_VERSION = "fusion/v0";
+/** Frozen run.json format marker. Runs without it (hcn-executed era) are rejected as incompatible. */
+export const RUN_FORMAT = "caller-managed/v1";
 export const RUN_ID_PATTERN = /^r[0-9a-f]{8}$/;
 export const WORKER_ID_PATTERN = /^w[a-z0-9-]+$/;
+export const JOB_ID_PATTERN = /^(generate|challenge|verify):(w[a-z0-9-]+)$/;
+
+/** Worker job stages the engine issues, in run order. */
+export type WorkerStage = "challenge" | "generate" | "verify";
+
+/**
+ * Boundary error shared by the engine's modules: an E-code plus a
+ * human-readable detail. E-code classes follow ADR-0002.
+ */
+export interface EngineError {
+  readonly code: string;
+  readonly detail: string;
+}
 
 export const RUN_STAGES = [
   "REGISTERED",
-  "SPAWNING",
   "GENERATING",
   "NORMALIZING",
   "CHALLENGING",
@@ -17,25 +32,21 @@ export const RUN_STAGES = [
   "DECIDING",
   "DONE",
   "FAILED",
-  "AWAITING-INPUT",
 ] as const;
 export type RunStage = (typeof RUN_STAGES)[number];
 
 /**
  * Legal transitions the engine enforces. Stages run in order, once each.
- * AWAITING-INPUT suspends a --wait run at a wave end while a worker
- * question stands; fusion resume re-enters the suspended stage. FAILED is
- * reachable from any non-terminal stage; FAILED retains partial events.
+ * FAILED is reachable from any non-terminal stage via abort or the
+ * no-survivors gate; FAILED retains partial events.
  */
 const TRANSITIONS: Record<Exclude<RunStage, "DONE" | "FAILED">, readonly RunStage[]> = {
-  REGISTERED: ["SPAWNING"],
-  SPAWNING: ["GENERATING"],
-  GENERATING: ["NORMALIZING", "AWAITING-INPUT"],
+  REGISTERED: ["GENERATING"],
+  GENERATING: ["NORMALIZING"],
   NORMALIZING: ["CHALLENGING", "VERIFYING", "DECIDING"],
-  CHALLENGING: ["DECIDING", "VERIFYING", "AWAITING-INPUT"],
-  VERIFYING: ["DECIDING", "AWAITING-INPUT"],
+  CHALLENGING: ["VERIFYING", "DECIDING"],
+  VERIFYING: ["DECIDING"],
   DECIDING: ["DONE"],
-  "AWAITING-INPUT": ["GENERATING", "CHALLENGING", "VERIFYING"],
 };
 
 export function nextStages(from: RunStage): readonly RunStage[] {
@@ -50,7 +61,7 @@ export function isLegalTransition(from: RunStage, to: RunStage): boolean {
     return false;
   }
   if (to === "FAILED") {
-    return from !== "DONE";
+    return from !== "DONE" && from !== "FAILED";
   }
   return nextStages(from).includes(to);
 }
@@ -58,11 +69,11 @@ export function isLegalTransition(from: RunStage, to: RunStage): boolean {
 export interface WorkerConfig {
   /** Worker id within the run, e.g. w1. */
   readonly workerId: string;
-  /** Harness to spawn through `hcn run`. */
-  readonly harness: string;
-  /** Model id passed to hcn; undefined means the harness default. */
+  /** Caller hint: harness the caller may route this worker to. Never enforced. */
+  readonly harness?: string;
+  /** Caller hint: model id the caller may route this worker to. Never enforced. */
   readonly model?: string;
-  /** Per-worker wall-clock budget, seconds. Maps to hcn --timeout. */
+  /** Per-worker advisory wall-clock budget, seconds. */
   readonly timeoutSec: number;
   readonly prompt: string;
 }
@@ -75,36 +86,21 @@ export interface RunRegistration {
   readonly stoppingRule: string;
   readonly workers: readonly WorkerConfig[];
   readonly registeredAt: string;
-  /** Opt-in caller wait: suspend at wave ends while a question stands. */
-  readonly wait?: boolean;
-  /** Hold deadline for a suspended run, ISO time. */
-  readonly waitUntil?: string;
-  /** Original pattern flags, for rebuild on resume. */
+  /** Original pattern flags, for rebuilding stages at submit time. */
   readonly patternOptions?: Record<string, string | boolean>;
-}
-
-export interface PendingQuestion {
-  readonly question: Record<string, unknown>;
-  readonly sessionId: string;
-  readonly workerId: string;
-}
-
-export interface SuspendedState {
-  readonly pendingQuestions: readonly PendingQuestion[];
-  readonly resumeStage: RunStage;
-  readonly suspendedAt: string;
-  readonly waitUntil?: string;
+  /** Evidence file content frozen at registration (ADR-0003: no dependence on later file state). */
+  readonly evidenceSnapshot?: { readonly path: string; readonly content: string };
 }
 
 export type FusionEventKind =
-  | "worker"
   | "claim"
-  | "stage"
-  | "fusion"
   | "decision"
-  | "question"
+  | "done"
   | "failure"
-  | "done";
+  | "fusion"
+  | "stage"
+  | "submission"
+  | "wave";
 
 export interface FusionEvent {
   readonly schemaVersion: string;
@@ -124,6 +120,8 @@ export function makeEvent(
 }
 
 export interface StampedProvenance {
+  /** Marks every identity field as caller-reported; Fusion cannot verify it. */
+  readonly source: "caller-reported";
   readonly harness: string;
   readonly model: string;
   readonly runId: string;
@@ -133,9 +131,9 @@ export interface StampedProvenance {
 }
 
 /**
- * Stamp provenance for a worker's claim. Every field comes from the
- * tool's own records (run registry + hcn identity event); nothing is
- * read from worker output, so workers cannot forge it.
+ * Stamp provenance for an accepted claim. runId/workerId come from the
+ * tool's own run record; harness/model/sessionId are what the caller
+ * reported for the worker, marked as such. Workers cannot set this block.
  */
 export function stampProvenance(args: {
   harness: string;
@@ -150,10 +148,21 @@ export function stampProvenance(args: {
     model: args.model,
     runId: args.runId,
     sessionId: args.sessionId,
+    source: "caller-reported",
     stampedAt: args.stampedAt ?? new Date().toISOString(),
     workerId: args.workerId,
   };
 }
+
+/**
+ * Stated wherever a run reports provenance or independence: Fusion cannot
+ * observe worker contexts; the caller owns isolation and identity.
+ */
+export const PROVENANCE_LIMITS = {
+  identity:
+    "caller-reported: harness/model/sessionId are what the caller submitted; Fusion cannot verify them",
+  isolation: "caller-enforced: Fusion launches no processes and cannot prove worker isolation",
+} as const;
 
 /** Validate a registration before freezing run.json. Throws on violation. */
 export function checkRegistration(reg: RunRegistration): void {

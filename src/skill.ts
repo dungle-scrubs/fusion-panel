@@ -11,8 +11,9 @@ const join = (values: readonly string[]): string => [...values].sort().join("|")
 export const SKILL_TEXT = `fusion - a composable fusion layer over agent harnesses.
 
 fusion is NOT a harness. A harness owns an agent's loop (context, tools,
-permissions). fusion composes runs of harnesses. All agent execution goes
-through \`hcn run\`.
+permissions). fusion composes runs of harnesses. You - the calling
+harness - execute the worker jobs with your own delegation tools;
+fusion never launches a process (ADR-0003).
 
 Choosing a method - match the problem shape, not the habit:
   - One bounded question, and one model's answer is not trusted on its
@@ -49,12 +50,13 @@ Choosing a method - match the problem shape, not the habit:
     ach explains, it does not rank options.
   - You already hold claims or sealed votes and only want mechanical
     work (schema checks, dedup, vote/median, calibration scoring) ->
-    tier 1 directly. A pattern run adds isolation you do not need.
+    tier 1 directly. A pattern run adds a delegation loop you do not need.
   - One deep pass by one model is enough -> do not call fusion at all;
     run that harness. fusion spends N workers to buy independence - pay
     it only when independence is the missing ingredient.
-  - Secret material in the task or claims -> local models only (see the
-    privacy rule below); never route it to a hosted model through fusion.
+  - Secret material in the task or claims -> route every worker job to
+    a local model (see the privacy rule below); never route it to a
+    hosted model through fusion.
 
 Tier 1 (model-free, deterministic, pipe freely - JSON in, JSON out):
   fusion validate [--json] <claims.jsonl>  Validate a JSONL stream of claims
@@ -82,78 +84,68 @@ Composition recipes:
   normalize | aggregate  Canonicalize sealed answers, then take the
     mechanical vote/median. No model in the loop.
 
-Tier 2 (pattern runs - the tool owns the run):
-  fusion jury --task <t> [--workers N] [--harness pi] [--model <m>] [--vocabulary a,b] [--roster h[:m]] [--merge]
-    Sealed parallel generation: every worker answers the task as one
-    claim (kind=answer), unseen by the others; equivalent answers are
-    normalized; plurality fusion decides mechanically. With --vocabulary,
-    workers answer with exactly one member verbatim and off-vocabulary
-    answers are rejected with a reason after one E001 retry. With --merge,
-    a blind merge worker clusters paraphrased answers by meaning and the
-    tally runs over clusters; the record carries pre-merge groups and the
-    mapping, and a failed merge falls back to the unmerged tally.
-    The decision
-    record carries the winning answer, minority report, rejected
-    options, residual risks, the vocabulary when set, and an independence
-    signal (answers, groups, duplicate rate) plus roster diversity
-    (distinct harnesses, models) - read both before trusting consensus.
-    Workers are separate processes with no shared transcript. A worker
-    that asks a genuine blocking question emits a question event with
-    the run id; other workers continue. With --wait, the run suspends
-    instead (E303) and 'fusion resume --run <id> --worker <w> --answer
-    <text>' answers one question and continues; --abort fails it.
-    --wait-sec sets the hold deadline.
-  fusion red-blue --task <t> --burden <b> [--harness] [--timeout] [--evidence f]
-    Adversarial pattern: a claimant files atomic claims (named executable
-    checks go in falsifier/evidence backticks); an opponent must challenge
-    with objection claims - free-form critique is rejected at the schema;
-    an umpire resolves each objection (running named checks, reporting
-    observed evidence; accept=sustained, revise=overruled); a judge
-    blind to worker identity scores the surviving record against the
-    burden. Budgets are symmetric across roles. With --evidence, the
-    claimant cites the researched sources instead of recalling its own.
-    The decision names each surviving claim, each rejected claim with
-    its ruling, and unresolved objections as residual risks.
-  fusion gonogo --task <t> [--reviewers N]
-    Ship/block gate: each reviewer returns a position (accept=GO,
-    test=GO WITH CONSTRAINT, escalate=NO-GO with the blocking concern,
-    abstain=NO-GO unverifiable). One NO-GO blocks - mechanically, with no
-    outvoting. The record carries every position and each block's
-    falsifier (what would clear it).
-  fusion shortlist --task <t> --rubric <r> [--generators N] [--judges M]
-    Open generation, blind judging: proposers submit options sealed;
-    judges score every option against the rubric (accept | revise |
-    abstain | escalate); an option advances only on a strict majority of
-    accepts. Duplicate options merge mechanically; unscored options are
-    flagged, never silently dropped.
-  fusion delphi --task <t> [--workers N] [--harness] [--timeout] [--vocabulary a,b]
-    Sealed panel, two rounds: round 1 answers independently; round 2
-    revises seeing its own answer plus the anonymized panel record.
-    With --vocabulary, round 1 answers from the set and round-2 revisions
-    must stay inside it. The decision record reports convergence (did
-    groups collapse?) and stability (did workers hold position?)
-    mechanically - read both before trusting the round-2 winner.
-  fusion ach --task <t> [--workers N] [--harness] [--timeout] [--evidence f]
-    Analysis of Competing Hypotheses: sealed analysts submit hypotheses
-    and evidence as linked claims (evidence links hypotheses via
-    dependencies + novelty: confirms = consistent, contradicts =
-    inconsistent; hypotheses cite their evidence back). The tool builds
-    the hypotheses-x-evidence matrix mechanically, marks evidence that
-    discriminates between hypotheses vs evidence consistent with all of
-    them, and reports the least-disconfirmed hypothesis with its
-    falsifier as the sensitivity check. With --evidence, analysts cite
-    the researched sources instead of recalling their own. Hypotheses
-    without evidence links are rejected at the pattern stage.
-  What a pattern run guarantees: the registration (run.json) is frozen
-    before generation; workers are separate hcn processes with no shared
-    transcript; every worker output is schema-validated at the boundary;
-    provenance (run/worker/harness/model/session) is stamped by the tool:
-    the session id comes from the hcn identity event, harness and model
-    from the tool's launch record. Workers cannot set any provenance
-    field; a failed worker does not fail the run while survivors remain
-    and is named in the decision record; every run
-    writes .fusion/runs/<runId>/ (run.json, events.ndjson, decision.json)
-    replayable from the event stream.
+Tier 2 (pattern runs - fusion owns the method, you own the delegation):
+  fusion jury --task <t> [--workers N] [--vocabulary a,b] [--roster h[:m]] [--merge] [--json]
+  fusion red-blue --task <t> --burden <b> [--evidence f] [--json]
+  fusion gonogo --task <t> [--reviewers N] [--json]
+  fusion shortlist --task <t> --rubric <r> [--generators N] [--judges M] [--json]
+  fusion delphi --task <t> [--workers N] [--vocabulary a,b] [--json]
+  fusion ach --task <t> [--workers N] [--evidence f] [--json]
+    A pattern command STARTS a run: it freezes the registration
+    (.fusion/runs/<runId>/run.json, evidence content snapshotted) and
+    exits 0 with status "pending" and the first wave of jobs. Each job
+    carries jobId (stage:worker, e.g. generate:w1), workerId, stage,
+    the FULL worker prompt, an advisory timeoutSec, and optional
+    harness/model hints you may honor or override - you choose how to
+    delegate each job with your own tools.
+    Give each worker ONLY its job prompt. Jobs of a later wave are
+    issued only after every job of the current wave has a terminal
+    submission; stage prompts you receive are anonymized by fusion.
+    Definition order, not submission order, drives all tie-breaking.
+  fusion submit --run <id> --job <jobId> [file] [--json]
+    Submit one job's result (file or stdin), one JSON object, strict:
+    - success: {"claims":[<claim objects>],"identity":{"harness":
+      "<actual harness>","model":"<actual model or unknown>","sessionId":
+      "<opaque invocation/session id>"}} - identity is YOUR report of
+      what ran; fusion stamps it into provenance marked caller-reported.
+      At least one claim; submit a failure instead of an empty success.
+    - failure: {"failure":{"class":"timeout|provider-unavailable|other",
+      "detail":"optional"}} - the worker did not produce usable claims;
+      the run continues while survivors remain.
+    On success fusion validates every claim at the boundary (E201 lines
+    name the field; correct and resubmit the SAME job - nothing was
+    committed), remaps claim ids to run scope (<worker>:Cn), stamps
+    provenance, and returns the run's remaining jobs or, when the last
+    wave completes, the decision. Replays of an already-submitted job
+    and submissions to a terminal run are rejected (E204). A run locked
+    by another fusion command returns E304 - retry. Fusion never steals
+    a lock: if the holder is gone (killed mid-command), inspect
+    .fusion/runs/<runId>/lock yourself and remove it explicitly.
+  fusion status --run <id> [--json]
+    Reload the run across invocations: pending jobs (full briefs) or the
+    terminal decision. Never advances the run.
+  fusion abort --run <id> --reason <text> [--json]
+    Record a failed terminal decision with your reason; partial events
+    are retained. Use it when a worker is lost or the task is moot.
+  Run artifacts: .fusion/runs/<runId>/ - run.json (frozen registration
+    with format marker; runs from the hcn-executed era are rejected with
+    a usage error), state.json (mutable progress, replaced atomically),
+    events.ndjson (append-only audit), decision.json (terminal record).
+    Mutations serialize behind an exclusive per-run lock.
+
+What a pattern run guarantees - and what it does not:
+  - Guaranteed: the registration is frozen before any job is issued;
+    every submission is schema-validated at the boundary; stage barriers
+    and anonymized stage inputs are enforced by fusion; fusion is the
+    only stamper of provenance; the decision is mechanical - no model in
+    the fusion loop; records are durable and replayable.
+  - NOT guaranteed: fusion launches nothing and watches nothing, so
+    worker isolation is caller-enforced and harness/model/session
+    identity is caller-reported - fusion cannot verify either. Decision
+    and status records say so (provenanceLimits); do not describe a
+    fusion decision as independently verified. A failed worker is a
+    typed failure in the record, never a crash; if every generation job
+    fails, the run records a failed decision.
 
 Claim schema (one flat schema for all patterns):
   Required: claim_id (C-number, e.g. C1), kind
@@ -161,12 +153,14 @@ Claim schema (one flat schema for all patterns):
     status (${join(CLAIM_STATUSES)}), confidence (number
     in [0,1]), falsifier (non-empty - what result would change this claim).
   Optional: evidence[] (source_or_test + supports), assumptions[],
-    dependencies[] (C-number refs), novelty
-    (${join(NOVELTIES)}), requested_action
+    dependencies[] (C-number refs to the worker's own claims, or
+    worker-scoped refs like w-red:C1 to record claims you were shown),
+    novelty (${join(NOVELTIES)}), requested_action
     (${join(REQUESTED_ACTIONS)}).
   Unknown fields are rejected, not ignored. \`provenance\` is the ONLY
   tool-stamped block (runId, workerId, harness, model, sessionId,
-  stampedAt): the validator rejects any claim where the agent set it.
+  stampedAt, source: caller-reported): the validator rejects any claim
+  where the worker set it.
 
 Error handling and exit contract (ADR-0002):
   Every command emits {ok, run, step, errors[]} (machine-shaped with
@@ -174,8 +168,7 @@ Error handling and exit contract (ADR-0002):
   class: 0 ok, 1 usage, 2 validation/gate, 3 nothing takeable,
   4 internal. E-codes name class and field, e.g.
   E201: claims: C3.confidence: Invalid input. Crashes surface as E499
-  envelopes (exit 4), never as usage errors. Worker spawn failures are
-  typed outcomes in the run record - never error paths. Every invocation
+  envelopes (exit 4), never as usage errors. Every invocation
   appends start/end lines to .fusion/commands.jsonl; a start with no end
   is a hung or killed invocation.
 
@@ -190,18 +183,22 @@ What counts as a bug - file only these, nothing else:
     takeable) are NOT bugs: fix the invocation or the input. Fix
     guidance: E101/E106 argument errors - re-read the command help;
     E103/E104 unreadable or malformed input - fix the input; E201 claim
-    schema rejections - the error line names the field; E202/E203
-    unfusable input - check method/enum and non-empty input; E301 a
-    pattern run lost all workers - check the failed worker classes in
-    the run's events.ndjson and rerun; E302 nothing on input. Repeat
-    --roster per worker for mixed rosters; secret material routes to
-    local-only harnesses in every slot.
+    schema rejections - the error line names the field, correct and
+    resubmit the same job; E204 a gate rejected the submission
+    (already-submitted job, terminal run); a run whose every generation
+    job failed reports status "failed" with its decision payload -
+    check the failure classes in the run's events.ndjson and rerun;
+    E302 nothing on input; E304 run busy - another fusion command
+    holds the lock, retry; if the holder is truly gone you may remove
+    the stale lock file (.fusion/runs/<runId>/lock) yourself - fusion
+    never steals it. Repeat --roster per worker for mixed hints;
+    secret material routes to local-only models in every delegation.
 
 Rules that bind every caller:
   - Never call the tool a harness. That word means loop-owners
     (claude, codex, pi, muse, cursor, antigravity).
   - Justfiles parameterize pattern invocations; they never define patterns.
   - Privacy: work that puts secret material into model context runs on
-    local models only. Routing secret material to a hosted model through
-    fusion is a caller error.
+    local models only. You choose the routing, so routing secret
+    material to a hosted model through a fusion run is a caller error.
 `;

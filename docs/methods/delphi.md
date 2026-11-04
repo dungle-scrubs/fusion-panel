@@ -1,6 +1,6 @@
 # Delphi
 
-`fusion delphi --task <t> [--workers N] [--harness pi] [--model <m>] [--timeout <sec>] [--json]`
+`fusion delphi --task <t> [--workers N] [--timeout <sec>] [--json]`
 
 ## What it is for
 
@@ -14,13 +14,19 @@ Use it when anchoring on a first answer is the risk *and* some
 cross-pollination is expected to help - estimation, forecasting-style
 questions, and panels whose members correct each other's blind spots.
 
-## Mechanics
+## Mechanics (caller-managed, ADR-0003)
 
-1. **Round 1** (generate stage): N sealed workers, no shared transcript,
-   one `kind=answer` claim each.
-2. **Round 2** (the RFC challenge wave, used as the revision round): each
-   worker is a fresh sealed spawn that sees its OWN round-1 answer plus
-   the full anonymized panel record - blind to the other panelists'
+The command starts the run and returns the round-1 jobs; the caller
+executes each with its own delegation tools and submits results with
+`fusion submit` (`{claims, identity}` or `{failure}`). The round-2 wave
+is issued only after every round-1 job is terminal. Isolation is
+caller-enforced.
+
+1. **Round 1** (generate stage): N sealed workers, one `kind=answer`
+   claim each.
+2. **Round 2** (the challenge wave, used as the revision round): each
+   worker gets a fresh job that shows its OWN round-1 answer plus the
+   full anonymized panel record - blind to the other panelists'
    identities and models. It revises or keeps its position, with
    `novelty` stating which (`confirms` = kept, `new` = revised).
 3. Mechanical fusion, tier 1 canonicalization throughout:
@@ -43,15 +49,17 @@ escalate/revise vote), `pattern`.
 
 ## Guarantees and limits
 
-- Guaranteed: rounds are sealed spawns; round 2 is blind to others'
-  identities (engine-anonymized handoff); every signal is mechanical.
+- Guaranteed: round 2 is blind to others' identities (engine-anonymized
+  stage inputs); every signal is mechanical; ties break by definition
+  order, not submission order.
 - Limits: exactly one revision round (more rounds are a config change,
   deliberately absent); stability is measured by canonical comparison, not
-  the self-reported novelty field (both are recorded); a worker whose
-  claims are rejected gets the engine's single retry with errors fed back.
+  the self-reported novelty field (both are recorded); a rejected
+  submission leaves the run unchanged - correct the claims (E201 lines
+  name the fields) and resubmit the same job.
 
 ## Run artifacts
 
-`.fusion/runs/<runId>/` - `run.json`, `events.ndjson` (stage events show
-GENERATING then CHALLENGING; for Delphi the challenge wave IS the revision
-round), `decision.json`.
+`.fusion/runs/<runId>/` - `run.json` (frozen registration), `state.json`,
+`events.ndjson` (stage events show GENERATING then CHALLENGING; for
+Delphi the challenge wave IS the revision round), `decision.json`.

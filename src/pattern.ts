@@ -28,26 +28,45 @@ export interface RosterEntry {
   readonly model?: string;
 }
 
+/** Default harness hint: the caller delegates; fusion never launches anything. */
+export const DEFAULT_HARNESS_HINT = "caller";
+
+/**
+ * File access a pattern build may need, injectable so the CLI can freeze
+ * evidence file content at registration and rebuild later waves from the
+ * snapshot instead of a mutable external file.
+ */
+export interface PatternIo {
+  readonly readEvidence?: (path: string) => string;
+}
+
 export const ROSTER_OPTION: OptionSpec = {
   description:
-    "per-worker harness[:model], repeatable, position-mapped to worker index; " +
+    "per-worker harness[:model] hints, repeatable, position-mapped to worker index; " +
     "length must equal the worker count",
   name: "roster",
 };
 
+export const HARNESS_OPTION: OptionSpec = {
+  default: DEFAULT_HARNESS_HINT,
+  description: "harness hint for every worker (the caller owns routing and may override)",
+  name: "harness",
+};
+
 /**
- * Resolve per-worker harness/model assignments. Without --roster every
- * worker shares the --harness/--model pair (current behavior). With it,
- * each entry is one harness or harness:model; the count MUST equal the
- * worker count or the build fails before any spawn. Repeatable flags
- * arrive as a comma-joined string under commander, so split there too.
+ * Resolve per-worker harness/model hints. Without --roster every worker
+ * shares the --harness/--model pair. With it, each entry is one harness
+ * or harness:model; the count MUST equal the worker count or the build
+ * fails before any job is issued. Repeatable flags arrive as a
+ * comma-joined string under commander, so split there too. Hints are
+ * advisory: the caller may route a worker anywhere.
  */
 export function resolveRoster(
   options: PatternOptions,
   workerCount: number,
 ): { error: string } | { roster: RosterEntry[] } {
   const fallback: RosterEntry = {
-    harness: String(options["harness"] ?? "pi"),
+    harness: String(options["harness"] ?? DEFAULT_HARNESS_HINT),
     ...(options["model"] === undefined ? {} : { model: String(options["model"]) }),
   };
   const raw = options["roster"];
@@ -72,7 +91,9 @@ export function resolveRoster(
     })
     .filter((entry) => entry.harness.length > 0);
   if (entries.length !== workerCount) {
-    return { error: `--roster expects ${workerCount} entries (one per worker), got ${entries.length}` };
+    return {
+      error: `--roster expects ${workerCount} entries (one per worker), got ${entries.length}`,
+    };
   }
   return { roster: entries };
 }
@@ -84,9 +105,9 @@ export interface DiversityCounts {
 
 /**
  * Mechanical diversity counts over accepted claims: distinct harnesses
- * and distinct models from tool-stamped provenance. A second
- * independence signal beside the duplicate rate, never proof of
- * independence on its own.
+ * and distinct models from stamped provenance. The identity fields are
+ * caller-reported (ADR-0003), so these counts are a weak independence
+ * signal at best, never proof of independence.
  */
 export function diversityCounts(claims: readonly { provenance?: unknown }[]): DiversityCounts {
   const harnesses = new Set<string>();
@@ -110,17 +131,16 @@ export function diversityCounts(claims: readonly { provenance?: unknown }[]): Di
 export interface PatternDefinition {
   readonly command: string;
   readonly description: string;
-  build(options: PatternOptions): BuildResult;
+  build(options: PatternOptions, io?: PatternIo): BuildResult;
   readonly options: readonly OptionSpec[];
   summarize(decision: Record<string, unknown>, report: RunReport): readonly string[];
 }
 
 export interface RegistrationContext {
+  readonly evidenceSnapshot?: { path: string; content: string };
   readonly now: () => string;
   readonly patternOptions?: Record<string, string | boolean>;
   readonly runId: string;
-  readonly wait?: boolean;
-  readonly waitUntil?: string;
 }
 
 export function toRegistration(
@@ -129,6 +149,7 @@ export function toRegistration(
   context: RegistrationContext,
 ): RunRegistration {
   return {
+    evidenceSnapshot: context.evidenceSnapshot,
     pattern,
     ...(context.patternOptions !== undefined ? { patternOptions: context.patternOptions } : {}),
     registeredAt: context.now(),
@@ -136,34 +157,22 @@ export function toRegistration(
     rubric: build.rubric,
     stoppingRule: build.stoppingRule,
     task: build.task,
-    ...(context.wait === true ? { wait: true as const } : {}),
-    ...(context.waitUntil !== undefined ? { waitUntil: context.waitUntil } : {}),
     workers: build.workers,
   };
 }
 
-export const WAIT_OPTION: OptionSpec = {
-  description: "suspend at wave ends while a worker question stands; resume with fusion resume",
-  flag: "boolean",
-  name: "wait",
-};
-
-export const WAIT_SEC_OPTION: OptionSpec = {
-  default: "3600",
-  description: "hold deadline in seconds for a --wait suspension",
-  name: "wait-sec",
-};
-
 export const EVIDENCE_OPTION: OptionSpec = {
   description:
-    "dr citations export file (dr citations --json); researched sources workers must cite",
+    "dr citations export file (dr citations --json); researched sources workers must cite; content is frozen into the run record",
   name: "evidence",
 };
 
 /**
  * Resolve --evidence into a formatted prompt block. Reads the dr
- * citations export, converts mechanically, formats for prompts. Returns
- * an error string for unreadable or malformed input (E102 at build).
+ * citations export through the injected reader (the CLI passes the
+ * frozen snapshot on rebuild), converts mechanically, formats for
+ * prompts. Returns an error string for unreadable or malformed input
+ * (E102 at build).
  */
 export function resolveEvidence(
   options: PatternOptions,
@@ -215,26 +224,4 @@ export function resolveEvidence(
     };
   }
   return { block };
-}
-
-/**
- * Resolve --wait/--wait-sec into registration fields. --wait-sec without
- * --wait is E102: a deadline with no suspension is a silent no-op.
- */
-export function resolveWait(options: PatternOptions, now: () => string):
-  | { error: string }
-  | { wait?: boolean; waitUntil?: string } {
-  const wait = options["wait"] === true || options["wait"] === "true";
-  const rawSec = options["wait-sec"];
-  if (!wait) {
-    if (rawSec !== undefined) {
-      return { error: "--wait-sec requires --wait" };
-    }
-    return {};
-  }
-  const seconds = rawSec === undefined ? 3600 : Number(rawSec);
-  if (!Number.isFinite(seconds) || seconds <= 0) {
-    return { error: "--wait-sec must be positive seconds" };
-  }
-  return { wait: true, waitUntil: new Date(Date.parse(now()) + seconds * 1000).toISOString() };
 }

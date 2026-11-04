@@ -12,7 +12,6 @@ function reportOf(overrides: Partial<RunReport> = {}): RunReport {
   return {
     cause: "clean",
     decision: {},
-    events: [],
     runDir: "/tmp/x",
     runId: "r0a1b2c3",
     ...overrides,
@@ -259,7 +258,9 @@ describe("skill text covers every pattern command", () => {
     expect(text).toContain("Do NOT use it when nobody");
     expect(text).toContain("-> ach");
     expect(text).toContain("Do NOT use it to choose between proposals");
-    expect(text).toContain("tier 1 directly. A pattern run adds isolation you do not need.");
+    expect(text).toContain(
+      "tier 1 directly. A pattern run adds a delegation loop you do not need.",
+    );
     expect(text).toContain("do not call fusion at all");
   });
 });

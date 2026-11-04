@@ -1,8 +1,5 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type AcceptedClaim, executeRun } from "../src/engine";
+import type { AcceptedClaim } from "../src/engine";
 import { juryDefinition, juryFuse, juryWorkerPrompt } from "../src/jury";
 
 function answer(
@@ -13,7 +10,7 @@ function answer(
   return {
     claim: {
       claim: text,
-      claim_id: `C${workerId.slice(1)}`,
+      claim_id: `${workerId}:C1`,
       confidence: 0.8,
       falsifier: `falsifier ${workerId}`,
       kind: "answer",
@@ -22,18 +19,6 @@ function answer(
     },
     stage: "generate",
     workerId,
-  };
-}
-
-function rawAnswer(text: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    claim: text,
-    claim_id: "C1",
-    confidence: 0.8,
-    falsifier: "falsifier",
-    kind: "answer",
-    status: "documented",
-    ...extra,
   };
 }
 
@@ -100,7 +85,7 @@ describe("juryFuse", () => {
       answer("w3", "Hold", { confidence: 0.9, requested_action: "escalate" }),
     ]);
     expect(result.decision.residualRisks).toEqual([
-      { claimId: "C3", confidence: 0.9, falsifier: "falsifier w3" },
+      { claimId: "w3:C1", confidence: 0.9, falsifier: "falsifier w3" },
     ]);
   });
 
@@ -142,53 +127,11 @@ describe("juryFuse", () => {
   });
 });
 
-describe("jury through the engine", () => {
-  it("runs the full pattern with a fake spawner and writes the decision", () => {
-    const root = mkdtempSync(join(tmpdir(), "fusion-13-"));
-    const report = executeRun(
-      {
-        pattern: "jury",
-        registeredAt: "2026-09-23T00:00:00.000Z",
-        runId: "r0a1b2c3d",
-        stoppingRule: "every worker submits one answer claim or times out",
-        task: "ship or hold?",
-        workers: [
-          { harness: "pi", prompt: "p", timeoutSec: 5, workerId: "w1" },
-          { harness: "pi", prompt: "p", timeoutSec: 5, workerId: "w2" },
-        ],
-      },
-      {
-        fuse: juryFuse,
-        now: () => "2026-09-23T00:00:00.000Z",
-        repoRoot: root,
-        spawn: (config) => ({
-          exitCode: 0,
-          failureClass: null,
-          identity: {
-            harness: config.harness,
-            requestedModel: config.model ?? "harness-default",
-            sessionId: `s-${config.prompt.length}`,
-          },
-          question: null,
-          rawClaims: [rawAnswer("Ship it")],
-        }),
-      },
-    );
-    const kinds = report.events.map((e) => e.kind);
-    expect(kinds).toContain("fusion");
-    const fusion = report.events.find((e) => e.kind === "fusion");
-    expect(fusion?.payload).toMatchObject({ method: "plurality", winner: "ship it" });
-    const done = report.events[report.events.length - 1];
-    expect(done?.kind).toBe("done");
-    expect(done?.payload["cause"]).toBe("clean");
-  });
-});
-
 describe("jury merge", () => {
   const member = (workerId: string, text: string): AcceptedClaim => ({
     claim: {
       claim: text,
-      claim_id: `C${workerId.slice(1)}`,
+      claim_id: `${workerId}:C1`,
       confidence: 0.8,
       falsifier: `f ${workerId}`,
       kind: "answer",
@@ -197,7 +140,7 @@ describe("jury merge", () => {
     stage: "generate",
     workerId,
   });
-  const mergeClaim = (deps: number[], label: string): AcceptedClaim => ({
+  const mergeClaim = (deps: string[], label: string): AcceptedClaim => ({
     claim: {
       claim: label,
       claim_id: "C1",
@@ -226,7 +169,7 @@ describe("jury merge", () => {
         member("w1", "Ship the release"),
         member("w2", "Release it now"),
         member("w3", "Hold everything"),
-        mergeClaim([1, 2], "Ship the release"),
+        mergeClaim(["w1:C1", "w2:C1"], "Ship the release"),
       ],
       undefined,
     );
@@ -240,7 +183,7 @@ describe("jury merge", () => {
 
   it("falls back to the unmerged tally when the merge is unusable", () => {
     const result = juryFuse(
-      [member("w1", "Ship"), member("w2", "Hold"), mergeClaim([99], "Nonsense")],
+      [member("w1", "Ship"), member("w2", "Hold"), mergeClaim(["w9:C1"], "Nonsense")],
       undefined,
     );
     expect(result.fusion.merged).toBe(true);
@@ -257,6 +200,7 @@ describe("jury merge", () => {
     const staged = build.stages?.verify?.({ anonymizedClaims: [], byWorker: new Map() });
     expect(staged?.[0]?.workerId).toBe("w-merge");
     expect(staged?.[0]?.prompt).toContain("merge judge");
+    expect(staged?.[0]?.prompt).toContain("record id - answer text");
     expect(juryDefinition.build({ "merge-harness": "codex", task: "t" })).toEqual({
       error: "--merge-harness requires --merge",
     });

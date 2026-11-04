@@ -1,6 +1,6 @@
 # Go/No-Go
 
-`fusion gonogo --task <t> [--reviewers N] [--harness pi] [--model <m>] [--timeout <sec>] [--json]`
+`fusion gonogo --task <t> [--reviewers N] [--timeout <sec>] [--json]`
 
 ## What it is for
 
@@ -11,10 +11,16 @@ holding a real defect is a bad ship. The gate makes the veto mechanical.
 Adapted from the design doc's andon/go-no-go family, reduced to a gate
 without the mission-control subsystem (deferred, decision #4).
 
-## Mechanics
+## Mechanics (caller-managed, ADR-0003)
 
-1. N independent sealed reviewers (workers with repo access when the
-   task names the repo). Each replies with one `kind=answer` claim whose
+The command starts the run and returns all reviewer jobs in one wave;
+the caller executes each with its own delegation tools (repo access for
+the reviewing worker is the caller's to grant) and submits results with
+`fusion submit` (`{claims, identity}` or `{failure}`). Reviewer
+isolation is caller-enforced.
+
+1. N independent sealed reviewers. Each replies with one `kind=answer`
+   claim whose
    `requested_action` carries the position:
    - `accept` - GO
    - `test` - GO WITH CONSTRAINT, the constraint named in the claim
@@ -38,7 +44,8 @@ its concern, action, falsifier, reviewer), `constraints` (the union),
 
 - Guaranteed: the veto is a mechanical property of the tally, not a
   judgment; blocks carry falsifiers so the gate says what would reopen
-  it; no shared transcript between reviewers.
+  it; no cross-reviewer visibility - stage inputs are anonymized and
+  there is only one wave.
 - Limits: one wave, no appeal path - a blocked gate is re-run as a new
   gate once the falsifier is satisfied; reviewers judge the artifact
   through the task text and their own repo access, so the task must name

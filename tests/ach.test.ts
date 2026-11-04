@@ -142,7 +142,10 @@ describe("achFuse", () => {
 
 describe("evidence supply", () => {
   it("appends researched sources to the analyst prompt", () => {
-    const prompt = achWorkerPrompt("why?", "RESEARCHED EVIDENCE\n- [c001] https://a.example/: s (p1)");
+    const prompt = achWorkerPrompt(
+      "why?",
+      "RESEARCHED EVIDENCE\n- [c001] https://a.example/: s (p1)",
+    );
     expect(prompt).toContain("TASK: why?");
     expect(prompt).toContain("RESEARCHED EVIDENCE");
     expect(achWorkerPrompt("why?")).not.toContain("RESEARCHED EVIDENCE");
@@ -157,7 +160,13 @@ describe("evidence supply", () => {
         documents: [
           {
             citedBy: [
-              { claimId: "c001", claimStatus: "verified", locator: "p1", statement: "s", verdict: "supported" },
+              {
+                claimId: "c001",
+                claimStatus: "verified",
+                locator: "p1",
+                statement: "s",
+                verdict: "supported",
+              },
             ],
             fetch: { finalUrl: "https://a.example/", status: "ok" },
           },

@@ -5,8 +5,8 @@ import {
   delphiRound1Prompt,
   delphiRound2Prompt,
 } from "../src/delphi";
-import { juryFuse, parseVocabulary } from "../src/jury";
 import type { AcceptedClaim, RunReport } from "../src/engine";
+import { juryFuse, parseVocabulary } from "../src/jury";
 
 function claim(
   stage: AcceptedClaim["stage"],
@@ -94,10 +94,7 @@ describe("jury vocabulary", () => {
   });
 
   it("rejects off-vocabulary answers with a named reason", () => {
-    const result = juryFuse([member("w1", "ship"), member("w2", "maybe later")], [
-      "ship",
-      "hold",
-    ]);
+    const result = juryFuse([member("w1", "ship"), member("w2", "maybe later")], ["ship", "hold"]);
     expect(result.decision.decision).toBe("ship");
     expect(result.decision.rejectedOptions).toEqual([
       {
@@ -228,7 +225,6 @@ describe("delphi definition", () => {
     const report: RunReport = {
       cause: "clean",
       decision: {},
-      events: [],
       runDir: "/tmp/x",
       runId: "r0a1b2c3",
     };
@@ -246,69 +242,5 @@ describe("delphi definition", () => {
     );
     expect(lines.join("\n")).toContain("r1 3 answers / 2 groups -> r2 3 / 2");
     expect(lines.join("\n")).toContain("convergence 0.33, stability 0.67");
-  });
-});
-
-describe("delphi through the engine", () => {
-  it("runs challenge-without-verify from GENERATING to DONE", async () => {
-    const { mkdtempSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const { executeRun } = await import("../src/engine");
-    const root = mkdtempSync(join(tmpdir(), "fusion-28-"));
-    const build = delphiDefinition.build({ harness: "pi", task: "t", timeout: "5", workers: "2" });
-    expect("error" in build).toBe(false);
-    if ("error" in build) {
-      return;
-    }
-    const report = executeRun(
-      {
-        pattern: "delphi",
-        registeredAt: "2026-09-24T00:00:00.000Z",
-        runId: "r3a4b5c6d",
-        stoppingRule: build.stoppingRule,
-        task: "t",
-        workers: build.workers,
-      },
-      {
-        fuse: build.fuse,
-        now: () => "2026-09-24T00:00:00.000Z",
-        repoRoot: root,
-        spawn: (config) => ({
-          exitCode: 0,
-          failureClass: null,
-          identity: {
-            harness: config.harness,
-            requestedModel: config.model ?? "harness-default",
-            sessionId: "s",
-          },
-          question: null,
-          rawClaims: [
-            {
-              claim: "ship",
-              claim_id: "C1",
-              confidence: 0.8,
-              falsifier: "x",
-              kind: "answer",
-              status: "documented",
-            },
-          ],
-        }),
-        stages: build.stages,
-      },
-    );
-    const stages = report.events
-      .filter((e) => e.kind === "stage")
-      .map((e) => (e.payload as Record<string, unknown>)["stage"]);
-    expect(stages).toEqual([
-      "SPAWNING",
-      "GENERATING",
-      "NORMALIZING",
-      "CHALLENGING",
-      "DECIDING",
-      "DONE",
-    ]);
-    expect(report.cause).toBe("clean");
-    expect(report.decision["pattern"]).toBe("delphi");
   });
 });

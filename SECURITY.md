@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-The latest release on `master`.
+The latest release on `main`.
 
 ## Reporting a vulnerability
 
@@ -12,6 +12,17 @@ You should hear back within a few days. If the report is confirmed, a fix ships 
 
 ## Trust model (worth knowing before you report)
 
-fusion spawns worker agents through `hcn` and treats their output as untrusted content: every claim is schema-validated at a tool boundary, provenance is stamped only by the tool, and nothing a worker writes executes or reaches the caller as instructions. Reports about a worker's content influencing a run's mechanics - rather than its claims - are especially welcome.
+Fusion returns worker jobs to the calling harness and treats submitted claims
+as untrusted content. Fusion validates each claim, controls stage transitions
+and computes the decision. Claims are data, never executable instructions.
+
+The caller supplies worker identity and enforces separate worker contexts.
+Provenance is tool-stamped, but its harness, model and session metadata are
+caller-reported. Fusion cannot verify that identity or prove worker isolation.
+Later-stage briefs include validated claims as evidence. The calling harness
+must treat those claims as untrusted content when delegating the briefs.
+
+Reports about claims changing run mechanics outside their defined schema, or
+submissions bypassing stage and duplicate checks, are especially welcome.
 
 Secret material must never enter a hosted model through fusion; local-model routing is the caller's responsibility and is documented in `fusion skill`.

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { aggregate, canonicalize, evidenceFromCitations, normalizeClaims, scoreForecasts } from "../src/tier1";
+import {
+  aggregate,
+  canonicalize,
+  evidenceFromCitations,
+  normalizeClaims,
+  scoreForecasts,
+} from "../src/tier1";
 
 describe("canonicalize", () => {
   it("collapses whitespace, trims, and lowercases", () => {
@@ -213,7 +219,10 @@ describe("evidenceFromCitations", () => {
 
   it("maps verified and single-source citations to evidence entries", () => {
     const supplied = evidenceFromCitations({
-      documents: [doc("c001", "verified", "https://a.example/"), doc("c002", "single-source", "https://b.example/")],
+      documents: [
+        doc("c001", "verified", "https://a.example/"),
+        doc("c002", "single-source", "https://b.example/"),
+      ],
       unfetched: [],
     });
     expect(supplied).toHaveLength(2);

@@ -1,6 +1,6 @@
 # Red-Blue-Umpire
 
-`fusion red-blue --task <t> --burden <b> [--harness pi] [--model <m>] [--timeout <sec>] [--evidence <file>] [--json]`
+`fusion red-blue --task <t> --burden <b> [--timeout <sec>] [--evidence <file>] [--json]`
 
 ## What it is for
 
@@ -10,29 +10,37 @@ blind to all identities - scores the survivors against a standard you set.
 Adapted from adversarial review and moot-court mechanisms (design doc,
 RFC-01 phase 5).
 
-## Mechanics
+## Mechanics (caller-managed, ADR-0003)
 
-Four role turns over one run, in RFC stage order (GENERATING,
-CHALLENGING, VERIFYING):
+Four role jobs over three waves, in stage order (GENERATING,
+CHALLENGING, VERIFYING). The command starts the run and returns the
+claimant job; each later wave is issued only after every job of the
+current wave has a terminal submission. The caller executes each job
+with its own delegation tools and submits results with `fusion submit`
+(`{claims, identity}` or `{failure}`); budgets are advisory and
+isolation is caller-enforced.
 
-1. **Claimant** (`w-red`) files 1-4 atomic claims. Named executable checks
-   go in the falsifier or an `evidence[]` entry (backticked command).
-   With `--evidence`, the prompt carries researched sources from a dr
-   citations export and the claimant cites those instead of recalling
-   its own.
-2. **Opponent** (`w-blue`) sees the claims anonymized - no provenance - and
-   must challenge with `kind=objection` claims whose `dependencies` target
-   the claim ids. Free-form critique never passes the schema.
-3. **Umpire** (`w-umpire`) resolves each objection. Where a check names a
-   command, it runs it and reports the result as `status=observed`
-   evidence. Ruling semantics ride on `requested_action`:
-   `accept` = objection sustained (target falls), `revise` = overruled
-   (target survives), `test` = inconclusive.
-4. **Judge** (`w-judge`) sees the full anonymized record and scores the
-   surviving claims against the `--burden`. Verdict: `accept` = the record
-   meets the burden.
+1. **Claimant** (`generate:w-red`) files 1-4 atomic claims. Named
+   executable checks go in the falsifier or an `evidence[]` entry
+   (backticked command). With `--evidence`, the prompt carries researched
+   sources from a dr citations export - the file content is frozen into
+   the run record, so later waves survive the file changing or
+   disappearing - and the claimant cites those instead of recalling its
+   own.
+2. **Opponent** (`challenge:w-blue`) sees the claims anonymized - no
+   provenance, no harness or model - and must challenge with
+   `kind=objection` claims whose `dependencies` target the record ids
+   (e.g. `w-red:C1`). Free-form critique never passes the schema.
+3. **Umpire** (`verify:w-umpire`) resolves each objection. Where a check
+   names a command, the caller's worker may run it and report the result
+   as `status=observed` evidence. Ruling semantics ride on
+   `requested_action`: `accept` = objection sustained (target falls),
+   `revise` = overruled (target survives), `test` = inconclusive.
+4. **Judge** (`verify:w-judge`) sees the full anonymized record and
+   scores the surviving claims against the `--burden`. Verdict:
+   `accept` = the record meets the burden.
 
-Budgets are symmetric: every role gets the same `--timeout`.
+Budgets are symmetric: every role gets the same `--timeout` hint.
 
 ## What the decision record carries
 
@@ -40,18 +48,22 @@ Budgets are symmetric: every role gets the same `--timeout`.
 - `survivingClaims` - claim ids that no sustained objection removed
 - `rejectedClaims` - each with its ruling reason
 - `residualRisks` - unresolved objections (inconclusive checks) with their targets
+- `provenanceLimits` - identity is caller-reported and isolation is caller-enforced
 
 ## Guarantees and limits
 
 - Guaranteed: challenge must be typed objections (schema-enforced), the
-  judge sees no worker identity or model, and a failed role does not fail
-  the run while survivors remain.
+  judge sees no worker identity or model, stage barriers hold, and a
+  failed role does not fail the run while survivors remain (submit a
+  `{failure}` for it).
 - Limits: one judge, no appeal path; id references across roles resolve
   through run-scoped ids (`w-red:C1`), so a worker's own claim ids stay
-  worker-scoped; a role whose claims are rejected gets one retry with the
-  validator errors fed back - a second rejection is final for the run.
+  worker-scoped; a rejected submission leaves the run unchanged - correct
+  the claims and resubmit the same job. Fusion cannot verify what the
+  caller reports about which harness or model actually ran.
 
 ## Run artifacts
 
-`.fusion/runs/<runId>/` - `run.json` (registration with the burden as
-rubric), `events.ndjson`, `decision.json`.
+`.fusion/runs/<runId>/` - `run.json` (frozen registration with the
+burden as rubric and the evidence snapshot), `state.json`,
+`events.ndjson`, `decision.json`.

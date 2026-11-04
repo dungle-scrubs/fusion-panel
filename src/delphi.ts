@@ -1,15 +1,15 @@
 import type { AcceptedClaim, FusedOutput, RunReport, StageInput } from "./engine";
+import { parseVocabulary } from "./jury";
 import {
+  DEFAULT_HARNESS_HINT,
   diversityCounts,
+  HARNESS_OPTION,
   type PatternDefinition,
   type PatternOptions,
-  resolveRoster,
-  WAIT_OPTION,
-  WAIT_SEC_OPTION,
   ROSTER_OPTION,
+  resolveRoster,
 } from "./pattern";
 import { canonicalize } from "./tier1";
-import { parseVocabulary } from "./jury";
 
 export const DELPHI_MIN_WORKERS = 2;
 export const DELPHI_DEFAULT_WORKERS = 3;
@@ -109,7 +109,9 @@ export function delphiFuse(
   const vocabKeys = vocabulary === undefined ? null : new Set(vocabulary.map(canonicalize));
   const round1 = accepted.filter((a) => a.stage === "generate" && a.claim["kind"] === "answer");
   const round2 = accepted.filter((a) => a.stage === "challenge" && a.claim["kind"] === "answer");
-  const vocabRejects = (entries: readonly AcceptedClaim[]): { claimId: string; reason: string }[] =>
+  const vocabRejects = (
+    entries: readonly AcceptedClaim[],
+  ): { claimId: string; reason: string }[] =>
     vocabKeys === null
       ? []
       : entries
@@ -245,7 +247,7 @@ export const delphiDefinition: PatternDefinition = {
     }
     const roster = rostered.roster;
     const slotOf = (index: number): { harness: string; model?: string } =>
-      roster[index] ?? { harness: "pi" };
+      roster[index] ?? { harness: DEFAULT_HARNESS_HINT };
     const rawVocabulary = options["vocabulary"];
     let vocabulary: string[] | undefined;
     if (rawVocabulary !== undefined) {
@@ -278,7 +280,8 @@ export const delphiDefinition: PatternDefinition = {
             workerId: `w${index + 1}-r2`,
           })),
       },
-      stoppingRule: "every worker answers round 1 and revises in round 2, or times out",
+      stoppingRule:
+        "every worker answers round 1 and revises in round 2, or the caller reports its failure",
       task,
       workers: Array.from({ length: workers }, (_, index) => ({
         ...base(index),
@@ -291,17 +294,15 @@ export const delphiDefinition: PatternDefinition = {
   description:
     "Delphi pattern run: sealed panel answers, then a revision round that sees " +
     "the anonymized panel record and its own round-1 answer; the tool reports " +
-    "convergence vs stability mechanically. Writes .fusion/runs/<runId>/. " +
-    "Exits 0 clean, 1 run failure, 2 invalid invocation.",
+    "convergence vs stability mechanically. Starts a caller-managed run and returns " +
+    "the first wave of jobs. Exits 0 on handoff or decision, 2 invalid invocation.",
   options: [
-    WAIT_OPTION,
-    WAIT_SEC_OPTION,
     { default: String(DELPHI_DEFAULT_WORKERS), description: "panel size", name: "workers" },
-    { default: "pi", description: "harness for every worker (hcn name)", name: "harness" },
-    { description: "model id passed to every worker", name: "model" },
+    HARNESS_OPTION,
+    { description: "model hint passed to every worker", name: "model" },
     {
       default: "300",
-      description: "per-worker wall-clock budget in seconds, per round",
+      description: "per-worker advisory budget in seconds, per round",
       name: "timeout",
     },
     {

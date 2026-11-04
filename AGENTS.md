@@ -1,8 +1,9 @@
 # fusion-panel
 
-`fusion` is a composition layer over agent harnesses, per
-[docs/rfc/01_fusion-a-composable-fusion-layer-over-agent-harnesses.rfc.md](docs/rfc/01_fusion-a-composable-fusion-layer-over-agent-harnesses.rfc.md).
-Domain terms live in [CONTEXT.md](CONTEXT.md); use them as written.
+`fusion` defines panel methods; calling harnesses execute the worker jobs.
+[ADR-0003](docs/adr/0003-caller-managed-delegation.md) governs delegation and
+supersedes RFC-01's HCN execution and isolation guarantees. Domain terms live in
+[CONTEXT.md](CONTEXT.md); use them as written.
 
 ## Decisions and docs
 
@@ -10,6 +11,7 @@ Domain terms live in [CONTEXT.md](CONTEXT.md); use them as written.
   before changing what it covers.
 - One doc per method under `docs/methods/` ([ADR-0001](docs/adr/0001-one-doc-per-method.md)):
   a new pattern or tier-1 function ships its doc in the same PR.
+- Enforced rules and their checks: [docs/agents/rules.md](docs/agents/rules.md).
 
 ## Product word rules (bind the tool's surfaces)
 
@@ -17,7 +19,10 @@ Domain terms live in [CONTEXT.md](CONTEXT.md); use them as written.
   codex, pi, muse, cursor, antigravity).
 - Tier 1 (validate/normalize/aggregate/score) stays model-free and
   deterministic.
-- All agent execution goes through `hcn run`.
+- Worker execution belongs to the caller. Fusion returns jobs and accepts
+  structured results; it never launches a harness.
+- Identity is caller-reported and isolation is caller-enforced. Describe those
+  limits wherever a run reports provenance or independence.
 - Unknown claim fields are rejected, not ignored; provenance is the only
   tool-stamped claim block.
 
