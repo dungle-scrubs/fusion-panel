@@ -56,7 +56,7 @@ Budgets are symmetric: every role gets the same `--timeout` hint.
 
 - `decision` and `judgeVerdict` - the ruling and its accept/revise/escalate/abstain verdict
 - `survivingClaims` - claim ids that no sustained objection removed
-- `rejectedClaims` - each with its ruling reason
+- `rejectedOptions` - each with its ruling reason
 - `residualRisks` - unresolved objections (inconclusive checks) with their targets
 - `provenanceLimits` - identity is caller-reported and isolation is caller-enforced
 

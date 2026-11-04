@@ -66,7 +66,29 @@ function fusionJson(args: string[], input?: string): { code: number | null; body
     .split("\n")
     .filter((line) => line.length > 0);
   expect(lines).toHaveLength(1);
-  return { body: JSON.parse(lines[0] as string) as JsonBody, code: proc.status };
+  const body = JSON.parse(lines[0] as string) as JsonBody;
+  if (body.status === "done" && body.runDir && body.decision) {
+    const registration = JSON.parse(readFileSync(join(body.runDir, "run.json"), "utf8")) as {
+      pattern: string;
+    };
+    const docPath = join(REPO, "docs", "methods", `${registration.pattern}.md`);
+    const section =
+      readFileSync(docPath, "utf8")
+        .split("## What the decision record carries")[1]
+        ?.split("\n## ")[0] ?? "";
+    const fields = [...section.matchAll(/`([A-Za-z][A-Za-z0-9]*)`/g)];
+    expect(
+      fields.length,
+      `${docPath}: document the decision record fields (ADR-0001)`,
+    ).toBeGreaterThan(0);
+    for (const match of fields) {
+      expect(
+        body.decision,
+        `${docPath}: replace ${match[1]} with the actual decision field (ADR-0001)`,
+      ).toHaveProperty(match[1] as string);
+    }
+  }
+  return { body, code: proc.status };
 }
 
 function fusionText(args: string[], input?: string): { code: number | null; out: string } {
