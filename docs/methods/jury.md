@@ -25,9 +25,9 @@ grouping is exact by construction.
    or a failure (`{failure}`). Fusion validates claims at the boundary,
    remaps ids to run scope, and stamps provenance marked
    `caller-reported`.
-3. Pattern strictness: only `kind=answer` claims enter fusion. Anything
-   else is rejected with a reason (E201; correct and resubmit the same
-   job).
+3. Each juror submits exactly one `kind=answer` claim. Wrong kinds,
+   empty results and extra votes return E201 before acceptance; correct
+   the result and resubmit the same job.
 4. Tier 1 canonicalization groups equivalent answers (NFC, whitespace,
    casing, number formats). Near-misses stay separate - there is no
    semantic dedup in the mechanical stage.
@@ -41,7 +41,9 @@ blind merge job (`verify:w-merge`): it sees the distinct canonical
 answers with their anonymized record ids (`w1:C1`, ...) and clusters
 paraphrases by meaning, citing those record ids in its cluster
 dependencies. The tally then runs over clusters; the record keeps
-pre-merge groups and the mapping, and a failed or unusable merge falls
+pre-merge groups and the mapping. Cluster dependencies must partition
+all listed answer IDs exactly once. Invalid or incomplete mappings return
+E201 and keep the merge job pending. Only a reported merge failure falls
 back to the unmerged tally.
 
 ## What the decision record carries
@@ -52,7 +54,9 @@ back to the unmerged tally.
   phrased differently show as three groups; the tool refuses to pretend
   that was one answer.
 - `minorityReport` - losing groups with their members
-- `rejectedOptions` - pattern-rejected claims with reasons
+- `rejectedOptions` - retained fusion diagnostics, normally empty for valid
+  submissions. New role-invalid results return E201 immediately and never
+  enter the completed decision.
 - `residualRisks` - minority answers with confidence >= 0.6 or their own
   escalate/revise vote, each with its falsifier
 - `provenanceLimits` - identity is caller-reported and isolation is

@@ -1,9 +1,8 @@
 import { readFileSync } from "node:fs";
 import type { AcceptedClaim, FusedOutput, RunReport, StageInput } from "./engine";
 import {
-  checkClaimActions,
-  checkClaimKinds,
   checkClaimReferences,
+  checkRoleClaims,
   DEFAULT_HARNESS_HINT,
   diversityCounts,
   EVIDENCE_OPTION,
@@ -153,7 +152,9 @@ export function redblueWorkers(
     return [{ ...base("blue"), prompt: opponentPrompt(input), workerId: "w-blue" }];
   }
   return [
-    { ...base("umpire"), prompt: umpirePrompt(input), workerId: "w-umpire" },
+    ...(input.anonymizedClaims.some((claim) => claim.kind === "objection")
+      ? [{ ...base("umpire"), prompt: umpirePrompt(input), workerId: "w-umpire" }]
+      : []),
     { ...base("judge"), prompt: judgePrompt(options.burden, input), workerId: "w-judge" },
   ];
 }
@@ -314,13 +315,20 @@ export const redblueDefinition: PatternDefinition = {
         );
         if (job.workerId === "w-blue")
           return [
-            ...checkClaimKinds(claims, ["objection"]),
+            ...checkRoleClaims(claims, {
+              kinds: ["objection"],
+              count: { min: 0, max: 4 },
+              actions: { required: false },
+            }),
             ...checkClaimReferences(claims, generationTargets, { singleTarget: true }),
           ];
         if (job.workerId === "w-umpire")
           return [
-            ...checkClaimKinds(claims, ["evidence"]),
-            ...checkClaimActions(claims, ["accept", "revise", "test"]),
+            ...checkRoleClaims(claims, {
+              kinds: ["evidence"],
+              count: { min: objections.size, max: objections.size },
+              actions: { required: true, allowed: ["accept", "revise", "test"] },
+            }),
             ...checkClaimReferences(claims, objections, {
               singleTarget: true,
               uniqueTargets: true,
@@ -329,12 +337,17 @@ export const redblueDefinition: PatternDefinition = {
           ];
         if (job.workerId === "w-judge")
           return [
-            ...checkClaimKinds(claims, ["answer"], 1),
-            ...checkClaimActions(claims, ["accept", "revise", "escalate", "abstain"]),
+            ...checkRoleClaims(claims, {
+              kinds: ["answer"],
+              count: { min: 1, max: 1 },
+              actions: { required: true, allowed: ["accept", "revise", "escalate", "abstain"] },
+            }),
           ];
-        const errors = checkClaimKinds(claims, ["answer", "evidence", "finding", "hypothesis"]);
-        if (claims.length > 4) errors.push("claimant submits at most four atomic claims");
-        return errors;
+        return checkRoleClaims(claims, {
+          kinds: ["answer", "evidence", "finding", "hypothesis"],
+          count: { min: 1, max: 4 },
+          actions: { required: false },
+        });
       },
       rubric: burden,
       stages: {
@@ -342,7 +355,7 @@ export const redblueDefinition: PatternDefinition = {
         verify: (input) => redblueWorkers(patternOptions, input, "verify", roleRoster),
       },
       stoppingRule:
-        "claimant files claims; opponent files objections; umpire rules; judge scores; the caller executes each job or reports its failure",
+        "claimant files claims; opponent reports objections or none; umpire rules when needed; judge assesses; the caller executes issued jobs or reports failure",
       task,
       workers: [
         {

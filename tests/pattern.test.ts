@@ -106,6 +106,17 @@ describe("roster wiring", () => {
     });
   });
 
+  it("red-blue omits the umpire when there are no objections", () => {
+    const build = redblueDefinition.build({ task: "review", burden: "evidence" });
+    expect("error" in build).toBe(false);
+    if ("error" in build) return;
+    expect(
+      build.stages
+        ?.verify?.({ anonymizedClaims: [], byWorker: new Map() })
+        .map((worker) => worker.workerId),
+    ).toEqual(["w-judge"]);
+  });
+
   it("red-blue expects four role slots in red,blue,umpire,judge order", () => {
     const build = redblueDefinition.build({
       burden: "b",
@@ -117,7 +128,10 @@ describe("roster wiring", () => {
       return;
     }
     expect(build.workers[0]?.harness).toBe("pi");
-    const staged = build.stages?.verify?.({ anonymizedClaims: [], byWorker: new Map() });
+    const staged = build.stages?.verify?.({
+      anonymizedClaims: [{ claim_id: "w-blue:C1", kind: "objection", claim: "challenge" }],
+      byWorker: new Map(),
+    });
     expect(staged?.map((w) => w.harness)).toEqual(["codex", "codex"]);
     expect(redblueDefinition.build({ burden: "b", roster: "pi", task: "t" })).toEqual({
       error: "--roster expects 4 entries (one per worker), got 1",

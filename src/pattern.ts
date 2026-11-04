@@ -15,7 +15,7 @@ export interface PatternBuild {
   readonly fuse: FuseFn;
   readonly rubric?: string;
   readonly stages?: StageBuilders;
-  readonly validateSubmission?: SubmissionCheck;
+  readonly validateSubmission: SubmissionCheck;
   readonly stoppingRule: string;
   readonly task: string;
   readonly workers: readonly WorkerConfig[];
@@ -25,31 +25,48 @@ export type PatternOptions = Record<string, string | boolean>;
 
 export type BuildResult = { error: string } | PatternBuild;
 
-export function checkClaimKinds(
-  claims: readonly Record<string, unknown>[],
-  kinds: readonly ClaimKind[],
-  exactCount?: number,
-): string[] {
-  const errors = claims.flatMap((claim) =>
-    kinds.some((kind) => kind === claim.kind)
-      ? []
-      : [`${String(claim.claim_id)}: this job requires kind ${kinds.join("|")}`],
-  );
-  if (exactCount !== undefined && claims.length !== exactCount) {
-    errors.push(`this job requires exactly ${exactCount} claim`);
-  }
-  return errors;
+export interface CountBounds {
+  readonly min: number;
+  readonly max: number;
 }
 
-export function checkClaimActions(
+export interface RoleContract {
+  readonly kinds: readonly ClaimKind[];
+  readonly count: CountBounds;
+  readonly actions:
+    | { readonly required: false }
+    | {
+        readonly required: true;
+        readonly allowed: readonly RequestedAction[];
+      };
+}
+
+export function checkClaimCount(count: number, bounds: CountBounds, label = "this job"): string[] {
+  if (count >= bounds.min && count <= bounds.max) return [];
+  return [
+    `${label} requires ${bounds.min === bounds.max ? `exactly ${bounds.min}` : `${bounds.min}-${bounds.max}`} claims`,
+  ];
+}
+
+export function checkRoleClaims(
   claims: readonly Record<string, unknown>[],
-  actions: readonly RequestedAction[],
+  contract: RoleContract,
 ): string[] {
-  return claims.flatMap((claim) =>
-    actions.some((action) => action === claim.requested_action)
-      ? []
-      : [`${String(claim.claim_id)}: requested_action must be ${actions.join("|")}`],
-  );
+  const errors = checkClaimCount(claims.length, contract.count);
+  for (const claim of claims) {
+    if (!contract.kinds.some((kind) => kind === claim.kind)) {
+      errors.push(`${String(claim.claim_id)}: this job requires kind ${contract.kinds.join("|")}`);
+    }
+    if (
+      contract.actions.required &&
+      !contract.actions.allowed.some((action) => action === claim.requested_action)
+    ) {
+      errors.push(
+        `${String(claim.claim_id)}: requested_action must be ${contract.actions.allowed.join("|")}`,
+      );
+    }
+  }
+  return errors;
 }
 
 export function checkClaimReferences(

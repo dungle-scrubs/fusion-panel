@@ -1,6 +1,6 @@
 import type { AcceptedClaim, FusedOutput, RunReport } from "./engine";
 import {
-  checkClaimKinds,
+  checkRoleClaims,
   DEFAULT_HARNESS_HINT,
   diversityCounts,
   HARNESS_OPTION,
@@ -130,18 +130,11 @@ export const gonogoDefinition: PatternDefinition = {
     return {
       fuse: gonogoFuse,
       validateSubmission(_job, claims) {
-        const errors = checkClaimKinds(claims, ["answer"], 1);
-        for (const claim of claims) {
-          if (
-            claim.requested_action !== undefined &&
-            !["accept", "test", "escalate", "abstain"].includes(String(claim.requested_action))
-          ) {
-            errors.push(
-              `${String(claim.claim_id)}: gate action must be accept|test|escalate|abstain`,
-            );
-          }
-        }
-        return errors;
+        return checkRoleClaims(claims, {
+          kinds: ["answer"],
+          count: { min: 1, max: 1 },
+          actions: { required: true, allowed: ["accept", "test", "escalate", "abstain"] },
+        });
       },
       stoppingRule: "every reviewer returns one position or the caller reports its failure",
       task,

@@ -99,11 +99,13 @@ Tier 2 (pattern runs - fusion owns the method, you own the delegation):
     per worker in each of two rounds, with the same vocabulary in both.
     Go/no-go positions use requested_action: accept=GO, test=GO WITH
     CONSTRAINT, escalate=NO-GO, abstain=NO-GO unverifiable; any NO-GO
-    blocks. Missing action is abstain, never GO.
+    blocks. The action is required; missing action is E201, not an
+    invented abstention. Use explicit abstain when you cannot verify.
     Red-blue roles submit claims, objections, evidence rulings, then
     an answer assessment. Umpire accept sustains an objection; revise
     overrules it; test is inconclusive. Umpire and judge share a wave,
-    so the judge sees claims and objections, not umpire rulings.
+    so the judge sees claims and objections, not umpire rulings. Zero
+    objections is a valid empty success; no umpire job is issued.
     Shortlist judges each option against the stated rubric; an option
     advances only on a strict majority of accept verdicts. ACH builds
     the hypotheses/evidence matrix from dependencies and novelty:
@@ -126,7 +128,9 @@ Tier 2 (pattern runs - fusion owns the method, you own the delegation):
       "<actual harness>","model":"<actual model or unknown>","sessionId":
       "<opaque invocation/session id>"}} - identity is YOUR report of
       what ran; fusion stamps it into provenance marked caller-reported.
-      At least one claim; submit a failure instead of an empty success.
+      Claim counts come from the role contract. Zero objections may use
+      claims: [] with identity; other roles require their stated claims.
+      A disallowed empty result returns E201 and stays pending.
     - failure: {"failure":{"class":"<non-empty failure label>",
       "detail":"optional"}} - the worker did not produce usable claims;
       the run continues while survivors remain.
@@ -182,6 +186,9 @@ Claim schema (one flat schema for all patterns):
     worker-scoped refs like w-red:C1 to record claims you were shown),
     novelty (${join(NOVELTIES)}), requested_action
     (${join(REQUESTED_ACTIONS)}).
+  Method contracts narrow this generic schema where needed. For example,
+  ACH evidence novelty must be confirms or contradicts; new and duplicates
+  do not express consistency for that role.
   Unknown fields are rejected, not ignored. \`provenance\` is the ONLY
   tool-stamped block (runId, workerId, harness, model, sessionId,
   stampedAt, source: caller-reported): the validator rejects any claim

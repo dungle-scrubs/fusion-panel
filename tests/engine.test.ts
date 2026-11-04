@@ -82,6 +82,7 @@ function echoRebuild(seen?: { challengeInputs: string[][]; fuseOrder: string[] }
   };
   return () => ({
     stages,
+    validateSubmission: () => [],
     fuse: (accepted) => {
       seen?.fuseOrder.push(...accepted.map((a) => a.workerId));
       return {
@@ -182,6 +183,12 @@ describe("parseSubmission", () => {
     }
   });
 
+  it("parses an empty success for the method's cardinality policy to check", () => {
+    const parsed = parseSubmission(success([]));
+    expect("errors" in parsed).toBe(false);
+    if (!("errors" in parsed)) expect(parsed.submission).toMatchObject({ claims: [] });
+  });
+
   it("parses a failure with class and detail", () => {
     const parsed = parseSubmission(failure("timeout", "worker exceeded 60s"));
     expect("errors" in parsed).toBe(false);
@@ -198,7 +205,7 @@ describe("parseSubmission", () => {
     ["both branches", '{"claims":[],"identity":{},"failure":{}}', "E104"],
     ["neither branch", '{"note":"hi"}', "E104"],
     ["unknown top field", `${success([validClaim("C1")]).slice(0, -1)},"extra":1}`, "E104"],
-    ["empty claims", success([]), "E104"],
+
     [
       "claims not array",
       '{"claims":{},"identity":{"harness":"a","model":"b","sessionId":"c"}}',
@@ -673,6 +680,7 @@ describe("wave barriers and definition order", () => {
     const root = mkdtempSync(join(tmpdir(), "fusion-anon-"));
     let seenClaims: Record<string, unknown>[] = [];
     const rebuild: PatternRebuild = () => ({
+      validateSubmission: () => [],
       stages: {
         challenge: (input) => {
           seenClaims = [...input.anonymizedClaims];
@@ -1067,7 +1075,11 @@ describe("evidence snapshot", () => {
       if ("error" in rebuilt) {
         return { error: rebuilt.error };
       }
-      return { stages: rebuilt.stages, fuse: rebuilt.fuse };
+      return {
+        stages: rebuilt.stages,
+        fuse: rebuilt.fuse,
+        validateSubmission: rebuilt.validateSubmission,
+      };
     };
     const claimant = submitToRun(
       root,

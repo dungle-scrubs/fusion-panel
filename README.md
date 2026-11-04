@@ -70,6 +70,8 @@ fusion submit --run <runId> --job generate:w1 submission.json --json
 
 Use the run and job IDs from the handoff. Submit once for each job. A failed
 worker uses `{"failure":{"class":"timeout"}}` instead of claims and identity.
+A role that permits zero claims, such as a red-blue opponent with no objections,
+uses `{"claims":[],"identity":{...}}` as a success. Other empty results return E201.
 The response contains the remaining jobs, the next stage's jobs, or the final
 decision. `status: "pending"` is a successful handoff, not a completed panel.
 

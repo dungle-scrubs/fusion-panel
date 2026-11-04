@@ -1,8 +1,7 @@
 import type { AcceptedClaim, FusedOutput, RunReport, StageInput } from "./engine";
 import {
-  checkClaimActions,
-  checkClaimKinds,
   checkClaimReferences,
+  checkRoleClaims,
   DEFAULT_HARNESS_HINT,
   diversityCounts,
   HARNESS_OPTION,
@@ -50,8 +49,8 @@ export function judgePrompt(task: string, rubric: string): (input: StageInput) =
       '- kind: "answer"',
       "- claim: your one-sentence note on this option against the rubric",
       "- dependencies: [the option's id exactly as listed below]",
-      '- requested_action: "accept" (advance) | "revise" (advance with the',
-      '  required change named in your note) | "abstain" (drop) |',
+      '- requested_action: "accept" (advance) | "revise" (request a change',
+      '  in your note; not an accept vote) | "abstain" (drop) |',
       '  "escalate" (needs a human decision)',
       '- status ("observed"|"documented"|"inferred"|"unknown"), confidence [0,1],',
       "  falsifier",
@@ -264,10 +263,12 @@ export const shortlistDefinition: PatternDefinition = {
     return {
       fuse: shortlistFuse,
       validateSubmission(job, claims, accepted) {
-        const errors = checkClaimKinds(claims, ["answer"]);
         if (job.stage === "generate") {
-          if (claims.length > 3) errors.push("proposers submit at most three options");
-          return errors;
+          return checkRoleClaims(claims, {
+            kinds: ["answer"],
+            count: { min: 1, max: 3 },
+            actions: { required: false },
+          });
         }
         const options = new Set(
           accepted
@@ -275,8 +276,11 @@ export const shortlistDefinition: PatternDefinition = {
             .map((entry) => String(entry.claim.claim_id)),
         );
         return [
-          ...errors,
-          ...checkClaimActions(claims, ["accept", "revise", "abstain", "escalate"]),
+          ...checkRoleClaims(claims, {
+            kinds: ["answer"],
+            count: { min: options.size, max: options.size },
+            actions: { required: true, allowed: ["accept", "revise", "abstain", "escalate"] },
+          }),
           ...checkClaimReferences(claims, options, {
             singleTarget: true,
             uniqueTargets: true,

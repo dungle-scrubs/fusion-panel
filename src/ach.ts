@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import type { AcceptedClaim, FusedOutput, RunReport } from "./engine";
 import {
-  checkClaimKinds,
+  checkClaimCount,
   checkClaimReferences,
+  checkRoleClaims,
   DEFAULT_HARNESS_HINT,
   type DiversityCounts,
   diversityCounts,
@@ -244,7 +245,13 @@ export const achDefinition: PatternDefinition = {
         const hypotheses = claims.filter((claim) => claim.kind === "hypothesis");
         const evidence = claims.filter((claim) => claim.kind === "evidence");
         const errors = [
-          ...checkClaimKinds(claims, ["hypothesis", "evidence"]),
+          ...checkRoleClaims(claims, {
+            kinds: ["hypothesis", "evidence"],
+            count: { min: 2, max: 6 },
+            actions: { required: false },
+          }),
+          ...checkClaimCount(hypotheses.length, { min: 1, max: 3 }, "hypotheses"),
+          ...checkClaimCount(evidence.length, { min: 1, max: 3 }, "evidence"),
           ...checkClaimReferences(
             hypotheses,
             new Set(evidence.map((claim) => String(claim.claim_id))),

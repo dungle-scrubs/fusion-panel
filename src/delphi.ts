@@ -1,7 +1,7 @@
 import type { AcceptedClaim, FusedOutput, RunReport, StageInput } from "./engine";
 import { parseVocabulary } from "./jury";
 import {
-  checkClaimKinds,
+  checkRoleClaims,
   DEFAULT_HARNESS_HINT,
   diversityCounts,
   HARNESS_OPTION,
@@ -269,7 +269,11 @@ export const delphiDefinition: PatternDefinition = {
     return {
       fuse: vocabulary === undefined ? delphiFuse : (accepted) => delphiFuse(accepted, vocabulary),
       validateSubmission(_job, claims) {
-        const errors = checkClaimKinds(claims, ["answer"], 1);
+        const errors = checkRoleClaims(claims, {
+          kinds: ["answer"],
+          count: { min: 1, max: 1 },
+          actions: { required: false },
+        });
         if (vocabulary !== undefined) {
           const allowed = new Set(vocabulary.map(canonicalize));
           for (const claim of claims) {

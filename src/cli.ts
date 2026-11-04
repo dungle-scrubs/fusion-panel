@@ -504,9 +504,7 @@ function rebuildFromRegistration(reg: RunRegistration): ReturnType<PatternRebuil
   }
   return {
     ...(built.stages !== undefined ? { stages: built.stages } : {}),
-    ...(built.validateSubmission !== undefined
-      ? { validateSubmission: built.validateSubmission }
-      : {}),
+    validateSubmission: built.validateSubmission,
     fuse: built.fuse,
   };
 }

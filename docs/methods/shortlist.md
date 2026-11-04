@@ -26,7 +26,7 @@ caller-enforced.
    and must score EVERY option, one verdict per option
    (`dependencies` targeting the option's record id):
    - `accept` - advance
-   - `revise` - advance with a required change, named in the note
+   - `revise` - request a change in the note; this is not an accept vote
    - `abstain` - drop
    - `escalate` - needs a human decision
 3. Mechanical tally (tier 1 canonicalization throughout):
@@ -36,8 +36,8 @@ caller-enforced.
      is not a majority
    - the shortlist ranks by accepts, then mean judge confidence, then
      first-seen
-   - options no judge scored are flagged `unscored` as residual risks -
-     never silently dropped
+   - if no judge supplies a usable result, options are flagged `unscored`
+     as residual risks, never silently dropped
 
 ## What the decision record carries
 
@@ -48,8 +48,10 @@ reason), `unscored`, `residualRisks`.
 ## Guarantees and limits
 
 - Guaranteed: blindness by the engine's anonymized stage inputs; every
-  number in the tally is mechanical; judges must score every option or
-  the gap is visible; ties break by definition order, not submission
+  number in the tally is mechanical. Each judge must submit exactly one
+  verdict per option with a valid action and sole target reference.
+  Missing, duplicate or unusable verdicts return E201 and leave the job
+  pending for correction. Ties break by definition order, not submission
   order.
 - Limits: judges score options as written - no clarification round (a
   revise-verdict note is the only feedback channel); one judging wave; a

@@ -124,7 +124,7 @@ export type PatternRebuild = (
   reg: RunRegistration,
 ) =>
   | { error: string }
-  | { stages?: StageBuilders; fuse: FuseFn; validateSubmission?: SubmissionCheck };
+  | { stages?: StageBuilders; fuse: FuseFn; validateSubmission: SubmissionCheck };
 
 export function jobIdOf(stage: WorkerStage, workerId: string): string {
   return `${stage}:${workerId}`;
@@ -317,7 +317,7 @@ interface AdvanceContext {
 
 function finalize(
   state: RunState,
-  ctx: AdvanceContext,
+  ctx: Pick<AdvanceContext, "now" | "runId">,
   cause: "aborted" | "clean" | "failed",
   decision: Record<string, unknown>,
 ): { events: readonly FusionEvent[] } {
@@ -539,9 +539,9 @@ export function submitToRun(
     }
     const job = state.jobs.find((entry) => entry.jobId === jobId);
     if (job === undefined) {
-      const submitted =
-        state.accepted.some((entry) => entry.jobId === jobId) ||
-        state.failures.some((entry) => entry.jobId === jobId);
+      const submitted = state.journal.some(
+        (event) => event.kind === "submission" && event.payload.jobId === jobId,
+      );
       return {
         errors: [
           {
@@ -606,8 +606,11 @@ export function submitToRun(
       if ("error" in built) {
         return { errors: [{ code: "E499", detail: `cannot rebuild pattern: ${built.error}` }] };
       }
-      const patternErrors =
-        built.validateSubmission?.(job, verdict.stamped, acceptedInDefinitionOrder(state)) ?? [];
+      const patternErrors = built.validateSubmission(
+        job,
+        verdict.stamped,
+        acceptedInDefinitionOrder(state),
+      );
       if (patternErrors.length > 0) {
         return { errors: patternErrors.map((detail) => ({ code: "E201", detail })) };
       }
@@ -756,18 +759,7 @@ export function abortRun(
       runId,
       survivors: survivorsOf(state),
     };
-    const events = finalize(
-      state,
-      {
-        now,
-        rebuild: () => ({ fuse: () => ({ decision: {}, fusion: {} }) }),
-        reg: reg.reg,
-        runDir,
-        runId,
-      },
-      "aborted",
-      decision,
-    ).events;
+    const events = finalize(state, { now, runId }, "aborted", decision).events;
     state.journal = [...state.journal, ...events];
     saveState(runDir, state);
     projectRun(runDir, state);

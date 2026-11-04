@@ -7,8 +7,8 @@ import type {
   StageInput,
 } from "./engine";
 import {
-  checkClaimKinds,
   checkClaimReferences,
+  checkRoleClaims,
   DEFAULT_HARNESS_HINT,
   type DiversityCounts,
   diversityCounts,
@@ -420,11 +420,17 @@ export const juryDefinition: PatternDefinition = {
       fuse,
       ...(stages !== undefined ? { stages } : {}),
       validateSubmission(job, claims, accepted) {
-        const errors = checkClaimKinds(
-          claims,
-          ["answer"],
-          job.stage === "generate" ? 1 : undefined,
-        );
+        const errors = checkRoleClaims(claims, {
+          kinds: ["answer"],
+          count: {
+            min: 1,
+            max:
+              job.stage === "generate"
+                ? 1
+                : accepted.filter((entry) => entry.stage === "generate").length,
+          },
+          actions: { required: false },
+        });
         if (job.stage === "verify") {
           const representatives = new Map<string, string>();
           for (const entry of accepted.filter((entry) => entry.stage === "generate")) {

@@ -27,8 +27,9 @@ isolation is caller-enforced.
    - `escalate` - NO-GO with a blocking concern; the falsifier states
      what evidence would clear the block
    - `abstain` - NO-GO as unverifiable (cannot judge)
-   A missing `requested_action` counts as `abstain` - silence is never a
-   GO.
+   The action is required. Missing or unsupported actions return E201
+   and keep the job pending. A reviewer who cannot verify enough must
+   explicitly choose `abstain`; silence never becomes a fabricated vote.
 2. Mechanical veto rule: **any `escalate` or `abstain` blocks; no
    outvoting.** Verdict otherwise: GO WITH CONSTRAINT when any reviewer
    named a constraint (all constraints carry into the record), else GO.
@@ -37,7 +38,7 @@ isolation is caller-enforced.
 
 `decision` (the verdict), `vetoRule`, `blockingConcerns` (each block with
 its concern, action, falsifier, reviewer), `constraints` (the union),
-`positions` (every reviewer's position with provenance on the claim),
+`positions` (reviewer positions referencing stamped claims in the event record),
 `reviewers`, `provenanceLimits`.
 
 ## Guarantees and limits

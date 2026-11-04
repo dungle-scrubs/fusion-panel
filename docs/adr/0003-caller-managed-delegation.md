@@ -20,8 +20,16 @@ schema and the method's role contract before accepting a job: required kinds,
 cardinality, actions, vocabulary and target coverage. Malformed votes and
 rulings return E201 and stay pending for correction. Valid scoring formulas
 remain unchanged; silently discarded malformed fields are not supported
-outcomes. Fusion stamps provenance and returns the remaining jobs. Once a wave is complete,
-Fusion builds the next wave from the validated record or writes its decision.
+outcomes. Every pattern declares a validator; each role contract explicitly
+specifies kinds, count bounds and whether an action is required. Fusion stamps
+provenance and returns the remaining jobs. Once a wave is complete, Fusion
+builds the next wave from the validated record or writes its decision.
+
+Empty success is accepted only when the role count permits zero. An opponent
+reporting no objections submits an empty claim array with identity; the run
+records success and issues only the judge, with no unnecessary umpire job.
+Other empty results remain pending with E201. The committed submission journal
+identifies replays even when a successful job produced no claims.
 
 `fusion status` returns pending jobs or a terminal decision across invocations.
 `fusion abort` records a terminal failure with the caller's reason. The caller

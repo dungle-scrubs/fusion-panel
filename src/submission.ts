@@ -126,17 +126,6 @@ export function parseSubmission(
   if (!Array.isArray(claims)) {
     return { errors: [{ code: "E104", detail: "claims must be an array" }] };
   }
-  if (claims.length === 0) {
-    return {
-      errors: [
-        {
-          code: "E104",
-          detail:
-            'success requires at least one claim; submit {"failure":{...}} for a worker that produced none',
-        },
-      ],
-    };
-  }
   const identity = parsed["identity"];
   if (!isRecord(identity)) {
     return {
@@ -341,7 +330,7 @@ export function validateSuccessClaims(
     stamped.push(claim);
   }
 
-  if (errors.length > 0 || stamped.length === 0) {
+  if (errors.length > 0) {
     return { errors: errors.map((detail) => ({ code: "E201", detail: `claims: ${detail}` })) };
   }
   return { stamped };

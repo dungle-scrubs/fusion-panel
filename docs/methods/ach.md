@@ -21,8 +21,8 @@ the caller executes each with its own delegation tools and submits
 results with `fusion submit` (`{claims, identity}` or `{failure}`).
 Isolation between analysts is caller-enforced.
 
-1. Each sealed analyst files hypotheses (`kind=hypothesis`, each citing
-   its evidence via `dependencies`) and evidence claims (each linking the
+1. Each analyst files one to three hypotheses (`kind=hypothesis`, each citing
+   its evidence via `dependencies`) and one to three evidence claims (each linking the
    hypotheses it bears on via `dependencies`, with `novelty`:
    `confirms` = consistent, `contradicts` = inconsistent). With
    `--evidence`, the prompt carries researched sources from a dr citations
@@ -31,8 +31,11 @@ Isolation between analysts is caller-enforced.
 2. A matrix cell (hypothesis, evidence) is consistent or inconsistent only
    when the link is bidirectional: the evidence names the hypothesis and
    the hypothesis cites the evidence. Otherwise the cell is `unlinked`.
-3. ACH strictness at the pattern stage: a hypothesis with no evidence
-   dependencies is rejected; so is evidence that links no hypothesis.
+3. The submission boundary enforces these counts and links. A hypothesis
+   must cite evidence, and evidence must cite hypotheses. Evidence novelty
+   must be `confirms` or `contradicts`; the generic schema's `new` and
+   `duplicates` values are not consistency judgments for this role.
+   Violations return E201 and leave the job pending for correction.
 4. Classification:
    - **diagnostic** - evidence bearing on a proper subset of hypotheses
      (it supports some over the rest, or counts against one)
@@ -48,8 +51,10 @@ Isolation between analysts is caller-enforced.
 
 - `hypotheses`, `matrix` (every cell with its consistency), `leastDisconfirmed`
 - `diagnosticEvidence`, `consistentWithAll`
-- `rejectedClaims` (pattern-strictness rejections), `residualRisks`
-  (the winner's falsifier)
+- `rejectedClaims` (retained fusion diagnostics, normally empty after the
+  role boundary validates submissions), `residualRisks` (the winner's
+  falsifier). Submission rejections are immediate E201 errors, not
+  claims accepted into this record.
 
 ## Guarantees and limits
 

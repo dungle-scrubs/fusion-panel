@@ -578,7 +578,7 @@ describe("negative cases", () => {
     expect(corrected.body.status).toBe("done");
   });
 
-  it("unknown submission fields and empty success are E104", () => {
+  it("unknown fields are E104 and an empty juror answer is E201", () => {
     const runId = freshJury();
     const extra = fusionJson(
       ["submit", "--run", runId, "--job", "generate:w1"],
@@ -586,7 +586,8 @@ describe("negative cases", () => {
     );
     expect(extra.body.errors?.[0]?.code).toBe("E104");
     const empty = fusionJson(["submit", "--run", runId, "--job", "generate:w1"], ok([]));
-    expect(empty.body.errors?.[0]?.code).toBe("E104");
+    expect(empty.body.errors?.[0]?.code).toBe("E201");
+    expect(jobIds(fusionJson(["status", "--run", runId]).body)).toContain("generate:w1");
   });
 
   it("schema-invalid claims are E201; a corrected resubmission of the same job lands", () => {
@@ -1114,6 +1115,143 @@ describe("role actions and reference coverage", () => {
     const done = submit(runId, "generate:w2", ok([hypothesis, evidence]));
     expect(done.body.status).toBe("done");
     expect(done.body.decision?.hypotheses).toHaveLength(2);
+  });
+});
+
+describe("declared role contracts", () => {
+  function claimantRun(): string {
+    const started = startRun("red-blue", ["--task", "review", "--burden", "evidence"]);
+    const runId = started.runId as string;
+    expect(submit(runId, "generate:w-red", ok([answerClaim("claim")])).code).toBe(0);
+    return runId;
+  }
+
+  it("records zero objections as success, skips the umpire, and detects its empty replay", () => {
+    const runId = claimantRun();
+    const blue = submit(runId, "challenge:w-blue", ok([]));
+    expect(blue.code).toBe(0);
+    expect(jobIds(blue.body)).toEqual(["verify:w-judge"]);
+    expect(submit(runId, "challenge:w-blue", ok([])).body.errors?.[0]?.code).toBe("E204");
+    const done = submit(
+      runId,
+      "verify:w-judge",
+      ok([answerClaim("meets the burden", { requested_action: "accept" })]),
+    );
+    expect(done.body.status).toBe("done");
+    expect(done.body.decision).toMatchObject({ judgeVerdict: "accept", failures: [] });
+    const events = readFileSync(join(root, ".fusion", "runs", runId, "events.ndjson"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const blueEvent = events.find(
+      (event) =>
+        event.kind === "submission" &&
+        (event.payload as Record<string, unknown>).jobId === "challenge:w-blue",
+    );
+    expect(blueEvent?.payload).toMatchObject({ outcome: "success", identity });
+  });
+
+  it("does not fabricate an umpire failure when the opponent reports a real failure", () => {
+    const runId = claimantRun();
+    const blue = submit(runId, "challenge:w-blue", fail("timeout"));
+    expect(jobIds(blue.body)).toEqual(["verify:w-judge"]);
+    const done = submit(
+      runId,
+      "verify:w-judge",
+      ok([answerClaim("assessment", { requested_action: "accept" })]),
+    );
+    expect(done.body.status).toBe("done");
+    expect(done.body.decision?.failures).toEqual([{ class: "timeout", workerId: "w-blue" }]);
+  });
+
+  it("requires an explicit gate action and accepts a corrected abstention", () => {
+    const started = startRun("gonogo", ["--task", "release", "--reviewers", "2"]);
+    const runId = started.runId as string;
+    const missing = submit(runId, "generate:w-gate-1", ok([answerClaim("cannot verify")]));
+    expect(missing.body.errors?.[0]?.code).toBe("E201");
+    expect(jobIds(fusionJson(["status", "--run", runId]).body)).toEqual(jobIds(started));
+    expect(
+      submit(
+        runId,
+        "generate:w-gate-1",
+        ok([answerClaim("cannot verify", { requested_action: "abstain" })]),
+      ).code,
+    ).toBe(0);
+    const done = submit(
+      runId,
+      "generate:w-gate-2",
+      ok([answerClaim("go", { requested_action: "accept" })]),
+    );
+    expect(done.body.decision?.decision).toBe("NO-GO");
+  });
+
+  it.each([
+    {
+      method: "shortlist",
+      args: ["--rubric", "useful", "--generators", "2"],
+      job: "generate:w-prop-1",
+      count: 4,
+    },
+    { method: "red-blue", args: ["--burden", "evidence"], job: "generate:w-red", count: 5 },
+  ])("enforces the declared $method generation cap", ({ method, args, job, count }) => {
+    const started = startRun(method, ["--task", "bounds", ...args]);
+    const runId = started.runId as string;
+    const claims = Array.from({ length: count }, (_, index) =>
+      answerClaim(`option ${index}`, { claim_id: `C${index + 1}` }),
+    );
+    expect(submit(runId, job, ok(claims)).body.errors?.[0]?.code).toBe("E201");
+    expect(jobIds(fusionJson(["status", "--run", runId]).body)).toEqual(jobIds(started));
+  });
+
+  it("enforces the opponent's four-objection cap", () => {
+    const runId = claimantRun();
+    const claims = Array.from({ length: 5 }, (_, index) =>
+      answerClaim(`objection ${index}`, {
+        claim_id: `C${index + 1}`,
+        kind: "objection",
+        dependencies: ["w-red:C1"],
+      }),
+    );
+    expect(submit(runId, "challenge:w-blue", ok(claims)).body.errors?.[0]?.code).toBe("E201");
+    expect(jobIds(fusionJson(["status", "--run", runId]).body)).toEqual(["challenge:w-blue"]);
+  });
+
+  it.each(["missing", "duplicate"])("rejects %s umpire coverage for two objections", (problem) => {
+    const runId = claimantRun();
+    const objections = ["C1", "C2"].map((claim_id) =>
+      answerClaim("objection", { claim_id, kind: "objection", dependencies: ["w-red:C1"] }),
+    );
+    submit(runId, "challenge:w-blue", ok(objections));
+    const first = answerClaim("overruled", {
+      kind: "evidence",
+      dependencies: ["w-blue:C1"],
+      requested_action: "revise",
+    });
+    const claims = problem === "missing" ? [first] : [first, { ...first, claim_id: "C2" }];
+    expect(submit(runId, "verify:w-umpire", ok(claims)).body.errors?.[0]?.code).toBe("E201");
+    expect(jobIds(fusionJson(["status", "--run", runId]).body)).toContain("verify:w-umpire");
+  });
+
+  it.each(["hypotheses", "evidence"])("enforces the ACH three-item cap for %s", (type) => {
+    const started = startRun("ach", ["--task", "why", "--workers", "2"]);
+    const runId = started.runId as string;
+    const hypothesisIds = type === "hypotheses" ? ["C1", "C2", "C3", "C4"] : ["C1"];
+    const evidenceIds = type === "hypotheses" ? ["C5"] : ["C2", "C3", "C4", "C5"];
+    const claims = [
+      ...hypothesisIds.map((claim_id) =>
+        answerClaim("cause", { claim_id, kind: "hypothesis", dependencies: evidenceIds }),
+      ),
+      ...evidenceIds.map((claim_id) =>
+        answerClaim("observation", {
+          claim_id,
+          kind: "evidence",
+          dependencies: hypothesisIds,
+          novelty: "confirms",
+        }),
+      ),
+    ];
+    expect(submit(runId, "generate:w1", ok(claims)).body.errors?.[0]?.code).toBe("E201");
+    expect(jobIds(fusionJson(["status", "--run", runId]).body)).toEqual(jobIds(started));
   });
 });
 
