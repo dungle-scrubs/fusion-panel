@@ -117,6 +117,7 @@ export interface EngineOptions {
 export type SubmissionCheck = (
   job: Job,
   claims: readonly Record<string, unknown>[],
+  accepted: readonly AcceptedClaim[],
 ) => readonly string[];
 
 export type PatternRebuild = (
@@ -605,7 +606,8 @@ export function submitToRun(
       if ("error" in built) {
         return { errors: [{ code: "E499", detail: `cannot rebuild pattern: ${built.error}` }] };
       }
-      const patternErrors = built.validateSubmission?.(job, verdict.stamped) ?? [];
+      const patternErrors =
+        built.validateSubmission?.(job, verdict.stamped, acceptedInDefinitionOrder(state)) ?? [];
       if (patternErrors.length > 0) {
         return { errors: patternErrors.map((detail) => ({ code: "E201", detail })) };
       }

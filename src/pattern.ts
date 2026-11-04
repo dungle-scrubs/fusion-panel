@@ -1,4 +1,4 @@
-import type { ClaimKind } from "./claim";
+import type { ClaimKind, RequestedAction } from "./claim";
 import type { FuseFn, RunReport, StageBuilders, SubmissionCheck } from "./engine";
 import type { RunRegistration, WorkerConfig } from "./run";
 import { type DrCitations, evidenceFromCitations, formatSuppliedEvidence } from "./tier1";
@@ -37,6 +37,51 @@ export function checkClaimKinds(
   );
   if (exactCount !== undefined && claims.length !== exactCount) {
     errors.push(`this job requires exactly ${exactCount} claim`);
+  }
+  return errors;
+}
+
+export function checkClaimActions(
+  claims: readonly Record<string, unknown>[],
+  actions: readonly RequestedAction[],
+): string[] {
+  return claims.flatMap((claim) =>
+    actions.some((action) => action === claim.requested_action)
+      ? []
+      : [`${String(claim.claim_id)}: requested_action must be ${actions.join("|")}`],
+  );
+}
+
+export function checkClaimReferences(
+  claims: readonly Record<string, unknown>[],
+  targets: ReadonlySet<string>,
+  policy: { singleTarget?: boolean; uniqueTargets?: boolean; coverAll?: boolean } = {},
+): string[] {
+  const errors: string[] = [];
+  const seen = new Set<string>();
+  for (const claim of claims) {
+    const dependencies = Array.isArray(claim.dependencies) ? (claim.dependencies as string[]) : [];
+    if (dependencies.length === 0 || (policy.singleTarget && dependencies.length !== 1)) {
+      errors.push(
+        `${String(claim.claim_id)}: dependencies must name ${policy.singleTarget ? "exactly one target" : "at least one target"}`,
+      );
+    }
+    for (const dependency of dependencies) {
+      if (!targets.has(dependency)) {
+        errors.push(
+          `${String(claim.claim_id)}: dependency ${dependency} is not a target for this role`,
+        );
+      }
+      if (policy.uniqueTargets && seen.has(dependency)) {
+        errors.push(`${String(claim.claim_id)}: target ${dependency} has more than one verdict`);
+      }
+      seen.add(dependency);
+    }
+  }
+  if (policy.coverAll) {
+    for (const target of targets) {
+      if (!seen.has(target)) errors.push(`missing verdict for target ${target}`);
+    }
   }
   return errors;
 }

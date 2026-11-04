@@ -1,6 +1,6 @@
 # Delphi
 
-`fusion delphi --task <t> [--workers N] [--timeout <sec>] [--harness <hint>] [--model <hint>] [--roster <harness:model>] [--json]`
+`fusion delphi --task <t> [--workers N] [--vocabulary a,b] [--timeout <sec>] [--harness <hint>] [--model <hint>] [--roster <harness:model>] [--json]`
 
 ## What it is for
 
@@ -39,6 +39,10 @@ caller-enforced.
 A panel that converges with high stability was already aligned; convergence
 with low stability means minds changed - read the minority report before
 trusting either.
+
+With `--vocabulary a,b`, answers in both rounds must match a declared member
+under canonical normalization. An off-vocabulary submission returns E201 and
+leaves the job pending for correction. The decision records the vocabulary.
 
 ## What the decision record carries
 

@@ -15,8 +15,12 @@ A pattern command freezes its registration and returns the first wave of jobs.
 Each job carries a run-scoped identifier, worker identifier, stage, prompt and
 advisory routing and timeout settings. The caller gives each worker only its
 brief, then submits its claims and actual identity through `fusion submit`.
-A failed worker is submitted as a failure instead. Fusion validates submissions,
-stamps provenance, and returns the remaining jobs. Once a wave is complete,
+A failed worker is submitted as a failure instead. Fusion validates the claim
+schema and the method's role contract before accepting a job: required kinds,
+cardinality, actions, vocabulary and target coverage. Malformed votes and
+rulings return E201 and stay pending for correction. Valid scoring formulas
+remain unchanged; silently discarded malformed fields are not supported
+outcomes. Fusion stamps provenance and returns the remaining jobs. Once a wave is complete,
 Fusion builds the next wave from the validated record or writes its decision.
 
 `fusion status` returns pending jobs or a terminal decision across invocations.

@@ -8,6 +8,7 @@ import type {
 } from "./engine";
 import {
   checkClaimKinds,
+  checkClaimReferences,
   DEFAULT_HARNESS_HINT,
   type DiversityCounts,
   diversityCounts,
@@ -418,12 +419,26 @@ export const juryDefinition: PatternDefinition = {
     return {
       fuse,
       ...(stages !== undefined ? { stages } : {}),
-      validateSubmission(job, claims) {
+      validateSubmission(job, claims, accepted) {
         const errors = checkClaimKinds(
           claims,
           ["answer"],
           job.stage === "generate" ? 1 : undefined,
         );
+        if (job.stage === "verify") {
+          const representatives = new Map<string, string>();
+          for (const entry of accepted.filter((entry) => entry.stage === "generate")) {
+            const canonical = canonicalize(String(entry.claim.claim));
+            if (!representatives.has(canonical))
+              representatives.set(canonical, String(entry.claim.claim_id));
+          }
+          errors.push(
+            ...checkClaimReferences(claims, new Set(representatives.values()), {
+              uniqueTargets: true,
+              coverAll: true,
+            }),
+          );
+        }
         if (job.stage === "generate" && vocabulary !== undefined) {
           const allowed = new Set(vocabulary.map(canonicalize));
           for (const claim of claims) {

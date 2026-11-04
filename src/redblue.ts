@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 import type { AcceptedClaim, FusedOutput, RunReport, StageInput } from "./engine";
 import {
+  checkClaimActions,
   checkClaimKinds,
+  checkClaimReferences,
   DEFAULT_HARNESS_HINT,
   diversityCounts,
   EVIDENCE_OPTION,
@@ -73,7 +75,7 @@ export function opponentPrompt(input: StageInput): string {
     "record ids only in dependencies.",
     'kind: "objection", claim (the objection, one sentence), status',
     '("observed"|"documented"|"inferred"|"unknown"), confidence [0,1],',
-    "falsifier, and dependencies: the claim_id(s) you target.",
+    "falsifier, and dependencies: [exactly one claimant claim_id you target].",
     "Do NOT include a provenance field.",
     "Reply with one JSON object per objection, nothing else.",
   ].join("\n");
@@ -96,7 +98,7 @@ export function umpirePrompt(input: StageInput): string {
     "record ids only in dependencies.",
     'kind: "evidence", claim (what the check or source shows), status',
     '("observed"|"documented"|"inferred"|"unknown"), confidence,',
-    "falsifier, dependencies: [the objection's claim_id], and requested_action:",
+    "falsifier, dependencies: [exactly one objection claim_id], and requested_action:",
     '  "accept" = objection sustained (target claim falls),',
     '  "revise" = objection overruled (target claim survives),',
     '  "test"   = check inconclusive.',
@@ -121,7 +123,7 @@ export function judgePrompt(burden: string, input: StageInput): string {
     "sentences naming what survives and what does not), status",
     '("observed"|"documented"|"inferred"|"unknown"), confidence [0,1],',
     "falsifier, requested_action: accept | revise | escalate | abstain",
-    "(accept = the surviving record meets the burden).",
+    "(accept = the claims and objections you saw meet the burden).",
     "Do NOT include a provenance field.",
   ].join("\n");
 }
@@ -299,11 +301,40 @@ export const redblueDefinition: PatternDefinition = {
     };
     return {
       fuse: redblueFuse,
-      validateSubmission(job, claims) {
-        if (job.workerId === "w-blue") return checkClaimKinds(claims, ["objection"]);
-        if (job.workerId === "w-umpire") return checkClaimKinds(claims, ["evidence"]);
-        if (job.workerId === "w-judge") return checkClaimKinds(claims, ["answer"], 1);
-        return checkClaimKinds(claims, ["answer", "evidence", "finding", "hypothesis"]);
+      validateSubmission(job, claims, accepted) {
+        const generationTargets = new Set(
+          accepted
+            .filter((entry) => entry.stage === "generate")
+            .map((entry) => String(entry.claim.claim_id)),
+        );
+        const objections = new Set(
+          accepted
+            .filter((entry) => entry.stage === "challenge" && entry.claim.kind === "objection")
+            .map((entry) => String(entry.claim.claim_id)),
+        );
+        if (job.workerId === "w-blue")
+          return [
+            ...checkClaimKinds(claims, ["objection"]),
+            ...checkClaimReferences(claims, generationTargets, { singleTarget: true }),
+          ];
+        if (job.workerId === "w-umpire")
+          return [
+            ...checkClaimKinds(claims, ["evidence"]),
+            ...checkClaimActions(claims, ["accept", "revise", "test"]),
+            ...checkClaimReferences(claims, objections, {
+              singleTarget: true,
+              uniqueTargets: true,
+              coverAll: true,
+            }),
+          ];
+        if (job.workerId === "w-judge")
+          return [
+            ...checkClaimKinds(claims, ["answer"], 1),
+            ...checkClaimActions(claims, ["accept", "revise", "escalate", "abstain"]),
+          ];
+        const errors = checkClaimKinds(claims, ["answer", "evidence", "finding", "hypothesis"]);
+        if (claims.length > 4) errors.push("claimant submits at most four atomic claims");
+        return errors;
       },
       rubric: burden,
       stages: {
@@ -328,11 +359,15 @@ export const redblueDefinition: PatternDefinition = {
   description:
     "Red-Blue-Umpire pattern run: a claimant files atomic claims, an opponent " +
     "challenges with objection claims, an umpire resolves source facts (running " +
-    "named executable checks), and a judge blind to worker identity scores the " +
-    "surviving record against the burden. Starts a caller-managed run and returns " +
+    "named executable checks), and a judge assesses claims and objections against " +
+    "the burden without harness, model or session metadata. Starts a caller-managed run and returns " +
     "the first wave of jobs. Exit codes follow the shared command contract.",
   options: [
-    { description: "the standard the surviving record must meet", name: "burden", required: true },
+    {
+      description: "the standard for assessing claims and objections",
+      name: "burden",
+      required: true,
+    },
     HARNESS_OPTION,
     { description: "model hint passed to every role", name: "model" },
     {

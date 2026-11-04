@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import type { AcceptedClaim, FusedOutput, RunReport } from "./engine";
 import {
   checkClaimKinds,
+  checkClaimReferences,
   DEFAULT_HARNESS_HINT,
   type DiversityCounts,
   diversityCounts,
@@ -239,7 +240,27 @@ export const achDefinition: PatternDefinition = {
     const supplied = evidenced.block;
     return {
       fuse: achFuse,
-      validateSubmission: (_job, claims) => checkClaimKinds(claims, ["hypothesis", "evidence"]),
+      validateSubmission(_job, claims) {
+        const hypotheses = claims.filter((claim) => claim.kind === "hypothesis");
+        const evidence = claims.filter((claim) => claim.kind === "evidence");
+        const errors = [
+          ...checkClaimKinds(claims, ["hypothesis", "evidence"]),
+          ...checkClaimReferences(
+            hypotheses,
+            new Set(evidence.map((claim) => String(claim.claim_id))),
+          ),
+          ...checkClaimReferences(
+            evidence,
+            new Set(hypotheses.map((claim) => String(claim.claim_id))),
+          ),
+        ];
+        for (const claim of evidence) {
+          if (claim.novelty !== "confirms" && claim.novelty !== "contradicts") {
+            errors.push(`${String(claim.claim_id)}: evidence novelty must be confirms|contradicts`);
+          }
+        }
+        return errors;
+      },
       stoppingRule:
         "every worker submits hypotheses and evidence or the caller reports its failure",
       task,

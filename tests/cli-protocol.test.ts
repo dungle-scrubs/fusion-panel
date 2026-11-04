@@ -6,6 +6,7 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -32,6 +33,7 @@ beforeAll(() => {
     platform: "node",
     format: "esm",
   });
+  chmodSync(CLI, 0o755);
 }, 60000);
 
 beforeEach(() => {
@@ -820,6 +822,13 @@ describe("method submission contracts", () => {
     const runId = started.runId as string;
     const block = answerClaim("block", { kind: "finding", requested_action: "escalate" });
     expect(submit(runId, "generate:w-gate-1", ok([block])).code).toBe(2);
+    const invalidAction = submit(
+      runId,
+      "generate:w-gate-1",
+      ok([{ ...block, kind: "answer", requested_action: "revise" }]),
+    );
+    expect(invalidAction.body.errors?.[0]?.code).toBe("E201");
+    expect(jobIds(fusionJson(["status", "--run", runId]).body)).toContain("generate:w-gate-1");
     expect(submit(runId, "generate:w-gate-1", ok([{ ...block, kind: "answer" }])).code).toBe(0);
     const final = submit(
       runId,
@@ -898,6 +907,213 @@ describe("method submission contracts", () => {
     const text = fusionText(["status", "--run", runId]).out;
     expect(text).toContain("caller-enforced");
     expect(text).toContain("caller-reported");
+    expect(
+      text
+        .split("\n")
+        .some((line) => line.startsWith("identity ") && line.includes("caller-reported")),
+    ).toBe(true);
+  });
+
+  it("rejects two answers from one juror without granting a second vote", () => {
+    const started = startRun("jury", ["--task", "choose", "--workers", "2"]);
+    const runId = started.runId as string;
+    const rejected = submit(
+      runId,
+      "generate:w1",
+      ok([answerClaim("ship"), answerClaim("hold", { claim_id: "C2" })]),
+    );
+    expect(rejected.body.errors?.[0]?.code).toBe("E201");
+    expect(jobIds(fusionJson(["status", "--run", runId]).body)).toEqual(jobIds(started));
+  });
+});
+
+describe("role actions and reference coverage", () => {
+  function shortlistRun(): string {
+    const started = startRun("shortlist", [
+      "--task",
+      "choose",
+      "--rubric",
+      "useful",
+      "--generators",
+      "2",
+      "--judges",
+      "3",
+    ]);
+    const runId = started.runId as string;
+    submit(runId, "generate:w-prop-1", ok([answerClaim("A")]));
+    submit(runId, "generate:w-prop-2", ok([answerClaim("B")]));
+    return runId;
+  }
+
+  const vote = (id: string, target: string, extra: Record<string, unknown> = {}) =>
+    answerClaim("verdict", {
+      claim_id: id,
+      dependencies: [target],
+      requested_action: "accept",
+      ...extra,
+    });
+
+  it.each([
+    "missing action",
+    "unsupported action",
+    "missing target",
+    "missing option",
+    "duplicate verdict",
+  ])("rejects shortlist %s without losing the judge job", (testCase) => {
+    const runId = shortlistRun();
+    const a = vote("C1", "w-prop-1:C1");
+    const b = vote("C2", "w-prop-2:C1");
+    const noAction = { ...a };
+    delete noAction.requested_action;
+    const cases: Record<string, Record<string, unknown>[]> = {
+      "missing action": [noAction, b],
+      "unsupported action": [{ ...a, requested_action: "test" }, b],
+      "missing target": [{ ...a, dependencies: [] }, b],
+      "missing option": [a],
+      "duplicate verdict": [a, { ...a, claim_id: "C3" }, b],
+    };
+    const rejected = submit(runId, "challenge:w-judge-1", ok(cases[testCase] ?? []));
+    expect(rejected.code).toBe(2);
+    expect(rejected.body.errors?.[0]?.code).toBe("E201");
+    expect(jobIds(fusionJson(["status", "--run", runId]).body)).toContain("challenge:w-judge-1");
+  });
+
+  it("requires a genuine majority of counted shortlist verdicts", () => {
+    const runId = shortlistRun();
+    for (let i = 1; i <= 3; i++) {
+      const done = submit(
+        runId,
+        `challenge:w-judge-${i}`,
+        ok([
+          vote("C1", "w-prop-1:C1", { requested_action: i === 1 ? "accept" : "abstain" }),
+          vote("C2", "w-prop-2:C1", { requested_action: "abstain" }),
+        ]),
+      );
+      expect(done.code).toBe(0);
+      if (i === 3) {
+        expect(done.body.decision?.shortlist).toEqual([]);
+        expect(done.body.decision?.decision).toBeNull();
+      }
+    }
+  });
+
+  const ruling = () =>
+    answerClaim("ruling", {
+      kind: "evidence",
+      dependencies: ["w-blue:C1"],
+      requested_action: "revise",
+    });
+
+  function redblueRun(): string {
+    const started = startRun("red-blue", ["--task", "review", "--burden", "evidence"]);
+    const runId = started.runId as string;
+    submit(runId, "generate:w-red", ok([answerClaim("claim")]));
+    expect(
+      submit(
+        runId,
+        "challenge:w-blue",
+        ok([answerClaim("objection", { kind: "objection", dependencies: ["w-red:C1"] })]),
+      ).code,
+    ).toBe(0);
+    return runId;
+  }
+
+  it("requires an opponent's target before accepting an objection", () => {
+    const started = startRun("red-blue", ["--task", "review", "--burden", "evidence"]);
+    const runId = started.runId as string;
+    submit(runId, "generate:w-red", ok([answerClaim("claim")]));
+    expect(
+      submit(
+        runId,
+        "challenge:w-blue",
+        ok([answerClaim("objection", { kind: "objection", dependencies: [] })]),
+      ).code,
+    ).toBe(2);
+  });
+
+  it.each(["missing action", "unsupported action", "missing target", "wrong target", "wrong kind"])(
+    "rejects an umpire's %s",
+    (testCase) => {
+      const runId = redblueRun();
+      const claim = ruling();
+      const noAction = { ...claim };
+      delete noAction.requested_action;
+      const cases: Record<string, Record<string, unknown>> = {
+        "missing action": noAction,
+        "unsupported action": { ...claim, requested_action: "escalate" },
+        "missing target": { ...claim, dependencies: [] },
+        "wrong target": { ...claim, dependencies: ["w-red:C1"] },
+        "wrong kind": { ...claim, kind: "answer" },
+      };
+      expect(submit(runId, "verify:w-umpire", ok([cases[testCase]])).body.errors?.[0]?.code).toBe(
+        "E201",
+      );
+    },
+  );
+
+  it.each(["missing action", "unsupported action", "wrong kind"])(
+    "rejects a red-blue judge's %s",
+    (testCase) => {
+      const runId = redblueRun();
+      const claim = answerClaim("assessment", { requested_action: "accept" });
+      if (testCase === "missing action") delete claim.requested_action;
+      if (testCase === "unsupported action") claim.requested_action = "test";
+      if (testCase === "wrong kind") claim.kind = "evidence";
+      expect(submit(runId, "verify:w-judge", ok([claim])).body.errors?.[0]?.code).toBe("E201");
+    },
+  );
+
+  it("accepts complete red-blue role outputs and returns the judge assessment", () => {
+    const runId = redblueRun();
+    expect(submit(runId, "verify:w-umpire", ok([ruling()])).code).toBe(0);
+    const done = submit(
+      runId,
+      "verify:w-judge",
+      ok([answerClaim("assessment", { requested_action: "accept" })]),
+    );
+    expect(done.body.status).toBe("done");
+    expect(done.body.decision?.judgeVerdict).toBe("accept");
+  });
+
+  it("requires merge clusters to partition the listed answer targets", () => {
+    const started = startRun("jury", ["--task", "choose", "--workers", "2", "--merge"]);
+    const runId = started.runId as string;
+    submit(runId, "generate:w1", ok([answerClaim("ship")]));
+    submit(runId, "generate:w2", ok([answerClaim("release")]));
+    const cluster = answerClaim("ship", { dependencies: ["w1:C1", "w2:C1"] });
+    for (const claims of [
+      [answerClaim("no targets")],
+      [{ ...cluster, dependencies: ["w1:C1"] }],
+      [cluster, { ...cluster, claim_id: "C2" }],
+    ]) {
+      expect(submit(runId, "verify:w-merge", ok(claims)).body.errors?.[0]?.code).toBe("E201");
+    }
+    const done = submit(runId, "verify:w-merge", ok([cluster]));
+    expect(done.body.status).toBe("done");
+    expect(done.body.decision?.independence).toMatchObject({ acceptedAnswers: 2 });
+  });
+
+  it("requires linked ACH hypotheses and evidence with a consistency judgment", () => {
+    const started = startRun("ach", ["--task", "why", "--workers", "2"]);
+    const runId = started.runId as string;
+    const hypothesis = answerClaim("cause", { kind: "hypothesis", dependencies: ["C2"] });
+    const evidence = answerClaim("observation", {
+      claim_id: "C2",
+      kind: "evidence",
+      dependencies: ["C1"],
+      novelty: "confirms",
+    });
+    for (const claims of [
+      [{ ...hypothesis, dependencies: [] }, evidence],
+      [hypothesis, { ...evidence, novelty: "new" }],
+      [hypothesis, { ...evidence, dependencies: [] }],
+    ]) {
+      expect(submit(runId, "generate:w1", ok(claims)).body.errors?.[0]?.code).toBe("E201");
+    }
+    expect(submit(runId, "generate:w1", ok([hypothesis, evidence])).code).toBe(0);
+    const done = submit(runId, "generate:w2", ok([hypothesis, evidence]));
+    expect(done.body.status).toBe("done");
+    expect(done.body.decision?.hypotheses).toHaveLength(2);
   });
 });
 

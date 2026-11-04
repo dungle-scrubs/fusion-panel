@@ -1,6 +1,8 @@
 import type { AcceptedClaim, FusedOutput, RunReport, StageInput } from "./engine";
 import {
+  checkClaimActions,
   checkClaimKinds,
+  checkClaimReferences,
   DEFAULT_HARNESS_HINT,
   diversityCounts,
   HARNESS_OPTION,
@@ -261,7 +263,27 @@ export const shortlistDefinition: PatternDefinition = {
     };
     return {
       fuse: shortlistFuse,
-      validateSubmission: (_job, claims) => checkClaimKinds(claims, ["answer"]),
+      validateSubmission(job, claims, accepted) {
+        const errors = checkClaimKinds(claims, ["answer"]);
+        if (job.stage === "generate") {
+          if (claims.length > 3) errors.push("proposers submit at most three options");
+          return errors;
+        }
+        const options = new Set(
+          accepted
+            .filter((entry) => entry.stage === "generate" && entry.claim.kind === "answer")
+            .map((entry) => String(entry.claim.claim_id)),
+        );
+        return [
+          ...errors,
+          ...checkClaimActions(claims, ["accept", "revise", "abstain", "escalate"]),
+          ...checkClaimReferences(claims, options, {
+            singleTarget: true,
+            uniqueTargets: true,
+            coverAll: true,
+          }),
+        ];
+      },
       rubric,
       stages: {
         challenge: (input: StageInput) =>

@@ -41,8 +41,9 @@ Choosing a method - match the problem shape, not the habit:
     not with more than one revision round in mind.
   - A claim set whose failure costs more than challenging it, and you
     can state the standard up front -> red-blue. It buys objection-only
-    challenge, fact resolution with executable checks, and a judge blind
-    to identity scoring against your burden. Do NOT use it when nobody
+    challenge and fact resolution with executable checks. A judge assesses
+    claims and objections against your burden without harness, model or session
+    metadata; role IDs remain visible. Do NOT use it when nobody
     can state the burden - the judge cannot score an unstated standard.
   - An observed outcome with several plausible causes -> ach. It forces
     every hypothesis against every evidence item and shows which
@@ -129,6 +130,11 @@ Tier 2 (pattern runs - fusion owns the method, you own the delegation):
     - failure: {"failure":{"class":"<non-empty failure label>",
       "detail":"optional"}} - the worker did not produce usable claims;
       the run continues while survivors remain.
+    Role-specific actions and target references are required where the
+    worker brief specifies them. Shortlist judges score every listed option
+    exactly once. Umpire rulings cover every objection exactly once; merge
+    clusters partition the listed answer IDs. Malformed or incomplete role
+    outputs remain pending with E201 so you can correct and resubmit.
     Failure labels include timeout and provider-unavailable; other
     non-empty labels are accepted as caller-reported failure classes.
     On success fusion validates every claim and its method role at the boundary (E201 lines
