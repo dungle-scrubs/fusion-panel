@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { buildSync } from "esbuild";
 import { describe, expect, it } from "vitest";
 import {
   appendCommandRecord,
@@ -87,9 +88,18 @@ describe("crash handlers", () => {
         "}, 0);",
       ].join("\n"),
     );
-    const proc = spawnSync("npx", ["tsx", script], {
+    const executable = join(root, "crash.mjs");
+    buildSync({
+      entryPoints: [script],
+      outfile: executable,
+      bundle: true,
+      platform: "node",
+      format: "esm",
+    });
+    const proc = spawnSync(process.execPath, [executable], {
       cwd: process.cwd(),
       encoding: "utf8",
+      env: { ...process.env, PATH: root },
     });
     expect(proc.status).toBe(4);
     const line = String(proc.stdout).trim().split("\n").pop();

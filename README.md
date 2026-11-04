@@ -98,6 +98,9 @@ distinguish pending, done and failed panels.
 Pattern commands accept optional harness, model, roster and timeout hints. The
 caller chooses actual routing, permissions, session handling and budgets.
 
+Run start, submit, status and abort from the same working directory. Run IDs
+belong to that directory's `.fusion/runs/` tree.
+
 Runs live under `.fusion/runs/<runId>/`: frozen `run.json`, mutable `state.json`,
 append-only `events.ndjson` and the terminal `decision.json`. Claims reject
 worker-authored provenance. Fusion stamps caller-reported identity explicitly.

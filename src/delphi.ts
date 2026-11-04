@@ -1,6 +1,7 @@
 import type { AcceptedClaim, FusedOutput, RunReport, StageInput } from "./engine";
 import { parseVocabulary } from "./jury";
 import {
+  checkClaimKinds,
   DEFAULT_HARNESS_HINT,
   diversityCounts,
   HARNESS_OPTION,
@@ -267,6 +268,18 @@ export const delphiDefinition: PatternDefinition = {
     };
     return {
       fuse: vocabulary === undefined ? delphiFuse : (accepted) => delphiFuse(accepted, vocabulary),
+      validateSubmission(_job, claims) {
+        const errors = checkClaimKinds(claims, ["answer"], 1);
+        if (vocabulary !== undefined) {
+          const allowed = new Set(vocabulary.map(canonicalize));
+          for (const claim of claims) {
+            if (!allowed.has(canonicalize(String(claim.claim)))) {
+              errors.push(`${String(claim.claim_id)}: answer must be in the declared vocabulary`);
+            }
+          }
+        }
+        return errors;
+      },
       stages: {
         challenge: (input: StageInput) =>
           Array.from({ length: workers }, (_, index) => ({
@@ -295,7 +308,7 @@ export const delphiDefinition: PatternDefinition = {
     "Delphi pattern run: sealed panel answers, then a revision round that sees " +
     "the anonymized panel record and its own round-1 answer; the tool reports " +
     "convergence vs stability mechanically. Starts a caller-managed run and returns " +
-    "the first wave of jobs. Exits 0 on handoff or decision, 2 invalid invocation.",
+    "the first wave of jobs. Exit codes follow the shared command contract.",
   options: [
     { default: String(DELPHI_DEFAULT_WORKERS), description: "panel size", name: "workers" },
     HARNESS_OPTION,

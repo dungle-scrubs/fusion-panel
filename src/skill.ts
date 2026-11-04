@@ -79,10 +79,11 @@ Tier 1 (model-free, deterministic, pipe freely - JSON in, JSON out):
     sources carry reasons, never silent drops.
 
 Composition recipes:
-  validate | normalize  Check claims, then group equivalent answers to
-    see the duplicate rate before voting.
-  normalize | aggregate  Canonicalize sealed answers, then take the
-    mechanical vote/median. No model in the loop.
+  Validate claims, then map accepted claims into normalize's JSON array.
+  Map normalized group membership into aggregate's {method, votes}
+    schema to compute a vote or median without a model. Each command
+    has its own envelope and input schema; direct shell pipes need an
+    explicit transformation between them.
 
 Tier 2 (pattern runs - fusion owns the method, you own the delegation):
   fusion jury --task <t> [--workers N] [--vocabulary a,b] [--roster h[:m]] [--merge] [--json]
@@ -91,6 +92,21 @@ Tier 2 (pattern runs - fusion owns the method, you own the delegation):
   fusion shortlist --task <t> --rubric <r> [--generators N] [--judges M] [--json]
   fusion delphi --task <t> [--workers N] [--vocabulary a,b] [--json]
   fusion ach --task <t> [--workers N] [--evidence f] [--json]
+    All methods accept --harness, --model, --roster and --timeout as
+    advisory hints. Repeat --roster once per worker when using it.
+    Jury uses one answer per juror and plurality. Delphi uses one answer
+    per worker in each of two rounds, with the same vocabulary in both.
+    Go/no-go positions use requested_action: accept=GO, test=GO WITH
+    CONSTRAINT, escalate=NO-GO, abstain=NO-GO unverifiable; any NO-GO
+    blocks. Missing action is abstain, never GO.
+    Red-blue roles submit claims, objections, evidence rulings, then
+    an answer assessment. Umpire accept sustains an objection; revise
+    overrules it; test is inconclusive. Umpire and judge share a wave,
+    so the judge sees claims and objections, not umpire rulings.
+    Shortlist judges each option against the stated rubric; an option
+    advances only on a strict majority of accept verdicts. ACH builds
+    the hypotheses/evidence matrix from dependencies and novelty:
+    confirms means consistent, contradicts means inconsistent.
     A pattern command STARTS a run: it freezes the registration
     (.fusion/runs/<runId>/run.json, evidence content snapshotted) and
     exits 0 with status "pending" and the first wave of jobs. Each job
@@ -100,7 +116,8 @@ Tier 2 (pattern runs - fusion owns the method, you own the delegation):
     delegate each job with your own tools.
     Give each worker ONLY its job prompt. Jobs of a later wave are
     issued only after every job of the current wave has a terminal
-    submission; stage prompts you receive are anonymized by fusion.
+    submission; stage prompts omit harness/model/session provenance.
+    Worker slots and role names remain visible in claim reference IDs.
     Definition order, not submission order, drives all tie-breaking.
   fusion submit --run <id> --job <jobId> [file] [--json]
     Submit one job's result (file or stdin), one JSON object, strict:
@@ -109,10 +126,12 @@ Tier 2 (pattern runs - fusion owns the method, you own the delegation):
       "<opaque invocation/session id>"}} - identity is YOUR report of
       what ran; fusion stamps it into provenance marked caller-reported.
       At least one claim; submit a failure instead of an empty success.
-    - failure: {"failure":{"class":"timeout|provider-unavailable|other",
+    - failure: {"failure":{"class":"<non-empty failure label>",
       "detail":"optional"}} - the worker did not produce usable claims;
       the run continues while survivors remain.
-    On success fusion validates every claim at the boundary (E201 lines
+    Failure labels include timeout and provider-unavailable; other
+    non-empty labels are accepted as caller-reported failure classes.
+    On success fusion validates every claim and its method role at the boundary (E201 lines
     name the field; correct and resubmit the SAME job - nothing was
     committed), remaps claim ids to run scope (<worker>:Cn), stamps
     provenance, and returns the run's remaining jobs or, when the last

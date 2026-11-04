@@ -1,6 +1,6 @@
 # Shortlist
 
-`fusion shortlist --task <t> --rubric <r> [--generators N] [--judges M] [--timeout] [--json]`
+`fusion shortlist --task <t> --rubric <r> [--generators N] [--judges M] [--timeout] [--harness <hint>] [--model <hint>] [--roster <harness:model>] [--json]`
 
 ## What it is for
 
@@ -55,6 +55,11 @@ reason), `unscored`, `residualRisks`.
   revise-verdict note is the only feedback channel); one judging wave; a
   rejected submission leaves the run unchanged - correct the claims and
   resubmit the same job.
+
+Identity is caller-reported and isolation is caller-enforced. The decision's
+`provenanceLimits` records both limits. Opaque worker slots remain visible in
+claim references, but harness, model and session metadata are removed from
+later-stage records.
 
 ## Run artifacts
 

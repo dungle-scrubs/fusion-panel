@@ -1,4 +1,5 @@
-import type { FuseFn, RunReport, StageBuilders } from "./engine";
+import type { ClaimKind } from "./claim";
+import type { FuseFn, RunReport, StageBuilders, SubmissionCheck } from "./engine";
 import type { RunRegistration, WorkerConfig } from "./run";
 import { type DrCitations, evidenceFromCitations, formatSuppliedEvidence } from "./tier1";
 
@@ -14,6 +15,7 @@ export interface PatternBuild {
   readonly fuse: FuseFn;
   readonly rubric?: string;
   readonly stages?: StageBuilders;
+  readonly validateSubmission?: SubmissionCheck;
   readonly stoppingRule: string;
   readonly task: string;
   readonly workers: readonly WorkerConfig[];
@@ -22,6 +24,22 @@ export interface PatternBuild {
 export type PatternOptions = Record<string, string | boolean>;
 
 export type BuildResult = { error: string } | PatternBuild;
+
+export function checkClaimKinds(
+  claims: readonly Record<string, unknown>[],
+  kinds: readonly ClaimKind[],
+  exactCount?: number,
+): string[] {
+  const errors = claims.flatMap((claim) =>
+    kinds.some((kind) => kind === claim.kind)
+      ? []
+      : [`${String(claim.claim_id)}: this job requires kind ${kinds.join("|")}`],
+  );
+  if (exactCount !== undefined && claims.length !== exactCount) {
+    errors.push(`this job requires exactly ${exactCount} claim`);
+  }
+  return errors;
+}
 
 export interface RosterEntry {
   readonly harness: string;

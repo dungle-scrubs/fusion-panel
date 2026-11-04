@@ -1,6 +1,6 @@
 # Sealed Jury
 
-`fusion jury --task <t> [--workers N] [--vocabulary <a,b>] [--timeout <sec>] [--merge] [--json]`
+`fusion jury --task <t> [--workers N] [--vocabulary <a,b>] [--timeout <sec>] [--merge] [--harness <hint>] [--model <hint>] [--roster <harness:model>] [--json]`
 
 ## What it is for
 
@@ -70,6 +70,10 @@ back to the unmerged tally.
   identity are the caller's to enforce and report; a worker whose
   submission is rejected leaves the run unchanged and the caller may
   correct and resubmit the same job.
+
+Identity is caller-reported and isolation is caller-enforced. The decision's
+`provenanceLimits` records both limits. Worker slots remain visible in record
+IDs, but harness, model and session metadata are hidden from the merge worker.
 
 ## Run artifacts
 

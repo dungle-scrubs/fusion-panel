@@ -114,9 +114,16 @@ export interface EngineOptions {
 }
 
 /** Rebuild a pattern's stages/fuse from the frozen registration (CLI supplies the definition). */
+export type SubmissionCheck = (
+  job: Job,
+  claims: readonly Record<string, unknown>[],
+) => readonly string[];
+
 export type PatternRebuild = (
   reg: RunRegistration,
-) => { error: string } | { stages?: StageBuilders; fuse: FuseFn };
+) =>
+  | { error: string }
+  | { stages?: StageBuilders; fuse: FuseFn; validateSubmission?: SubmissionCheck };
 
 export function jobIdOf(stage: WorkerStage, workerId: string): string {
   return `${stage}:${workerId}`;
@@ -531,9 +538,17 @@ export function submitToRun(
     }
     const job = state.jobs.find((entry) => entry.jobId === jobId);
     if (job === undefined) {
+      const submitted =
+        state.accepted.some((entry) => entry.jobId === jobId) ||
+        state.failures.some((entry) => entry.jobId === jobId);
       return {
         errors: [
-          { code: "E102", detail: `run "${runId}" has no job "${jobId}" in its current wave` },
+          {
+            code: submitted ? "E204" : "E102",
+            detail: submitted
+              ? `job "${jobId}" already has a terminal submission; run fusion status --run ${runId}`
+              : `run "${runId}" has no job "${jobId}" in its current wave`,
+          },
         ],
       };
     }
@@ -585,6 +600,14 @@ export function submitToRun(
       const verdict = validateSuccessClaims(parsed.submission.claims, job.workerId, state);
       if ("errors" in verdict) {
         return { errors: verdict.errors };
+      }
+      const built = options.rebuild(reg.reg);
+      if ("error" in built) {
+        return { errors: [{ code: "E499", detail: `cannot rebuild pattern: ${built.error}` }] };
+      }
+      const patternErrors = built.validateSubmission?.(job, verdict.stamped) ?? [];
+      if (patternErrors.length > 0) {
+        return { errors: patternErrors.map((detail) => ({ code: "E201", detail })) };
       }
       const provenance: StampedProvenance = stampProvenance({
         harness: parsed.submission.identity.harness,

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { AcceptedClaim, FusedOutput, RunReport } from "./engine";
 import {
+  checkClaimKinds,
   DEFAULT_HARNESS_HINT,
   type DiversityCounts,
   diversityCounts,
@@ -238,6 +239,7 @@ export const achDefinition: PatternDefinition = {
     const supplied = evidenced.block;
     return {
       fuse: achFuse,
+      validateSubmission: (_job, claims) => checkClaimKinds(claims, ["hypothesis", "evidence"]),
       stoppingRule:
         "every worker submits hypotheses and evidence or the caller reports its failure",
       task,

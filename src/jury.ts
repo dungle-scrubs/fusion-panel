@@ -7,6 +7,7 @@ import type {
   StageInput,
 } from "./engine";
 import {
+  checkClaimKinds,
   DEFAULT_HARNESS_HINT,
   type DiversityCounts,
   diversityCounts,
@@ -417,6 +418,22 @@ export const juryDefinition: PatternDefinition = {
     return {
       fuse,
       ...(stages !== undefined ? { stages } : {}),
+      validateSubmission(job, claims) {
+        const errors = checkClaimKinds(
+          claims,
+          ["answer"],
+          job.stage === "generate" ? 1 : undefined,
+        );
+        if (job.stage === "generate" && vocabulary !== undefined) {
+          const allowed = new Set(vocabulary.map(canonicalize));
+          for (const claim of claims) {
+            if (!allowed.has(canonicalize(String(claim.claim)))) {
+              errors.push(`${String(claim.claim_id)}: answer must be in the declared vocabulary`);
+            }
+          }
+        }
+        return errors;
+      },
       stoppingRule: "every worker submits one answer claim or the caller reports its failure",
       task,
       workers: Array.from({ length: workers }, (_, index) => {
@@ -435,7 +452,7 @@ export const juryDefinition: PatternDefinition = {
   description:
     "Sealed Jury pattern run: N sealed workers answer the task as claims; equivalent answers " +
     "are normalized; plurality fusion decides mechanically. Starts a caller-managed run and " +
-    "returns its first wave of jobs. Exits 0 on handoff or decision, 2 invalid invocation.",
+    "returns its first wave of jobs. Exit codes follow the shared command contract.",
   options: [
     {
       default: String(JURY_DEFAULT_WORKERS),

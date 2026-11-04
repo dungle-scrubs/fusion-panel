@@ -1,12 +1,12 @@
 # Red-Blue-Umpire
 
-`fusion red-blue --task <t> --burden <b> [--timeout <sec>] [--evidence <file>] [--json]`
+`fusion red-blue --task <t> --burden <b> [--timeout <sec>] [--evidence <file>] [--harness <hint>] [--model <hint>] [--roster <harness:model>] [--json]`
 
 ## What it is for
 
 A claim set that should survive adversarial review before you rely on it.
 One worker proposes; another attacks; a third resolves facts; a fourth -
-blind to all identities - scores the survivors against a standard you set.
+without harness or model metadata - assesses the record against a standard you set.
 Adapted from adversarial review and moot-court mechanisms (design doc,
 RFC-01 phase 5).
 
@@ -36,9 +36,11 @@ isolation is caller-enforced.
    as `status=observed` evidence. Ruling semantics ride on
    `requested_action`: `accept` = objection sustained (target falls),
    `revise` = overruled (target survives), `test` = inconclusive.
-4. **Judge** (`verify:w-judge`) sees the full anonymized record and
-   scores the surviving claims against the `--burden`. Verdict:
-   `accept` = the record meets the burden.
+4. **Judge** (`verify:w-judge`) sees the claims and objections and assesses
+   them against the `--burden`. The judge and umpire work in the same wave,
+   so the judge does not see umpire rulings. Fusion applies those rulings
+   mechanically when both jobs finish. Judge verdict `accept` means that
+   the record the judge saw meets the burden.
 
 Budgets are symmetric: every role gets the same `--timeout` hint.
 
@@ -53,7 +55,7 @@ Budgets are symmetric: every role gets the same `--timeout` hint.
 ## Guarantees and limits
 
 - Guaranteed: challenge must be typed objections (schema-enforced), the
-  judge sees no worker identity or model, stage barriers hold, and a
+  judge sees no harness, model or session metadata, stage barriers hold, and a
   failed role does not fail the run while survivors remain (submit a
   `{failure}` for it).
 - Limits: one judge, no appeal path; id references across roles resolve
@@ -61,6 +63,11 @@ Budgets are symmetric: every role gets the same `--timeout` hint.
   worker-scoped; a rejected submission leaves the run unchanged - correct
   the claims and resubmit the same job. Fusion cannot verify what the
   caller reports about which harness or model actually ran.
+
+Identity is caller-reported and isolation is caller-enforced. Role names remain
+visible in claim references. The judge's assessment precedes the umpire rulings;
+a sequential reconsideration of those rulings is outside this method's current
+three-wave protocol.
 
 ## Run artifacts
 

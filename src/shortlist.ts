@@ -1,5 +1,6 @@
 import type { AcceptedClaim, FusedOutput, RunReport, StageInput } from "./engine";
 import {
+  checkClaimKinds,
   DEFAULT_HARNESS_HINT,
   diversityCounts,
   HARNESS_OPTION,
@@ -260,6 +261,7 @@ export const shortlistDefinition: PatternDefinition = {
     };
     return {
       fuse: shortlistFuse,
+      validateSubmission: (_job, claims) => checkClaimKinds(claims, ["answer"]),
       rubric,
       stages: {
         challenge: (input: StageInput) =>
@@ -284,7 +286,7 @@ export const shortlistDefinition: PatternDefinition = {
     "Shortlist pattern run: sealed proposers generate options; blind judges score " +
     "every option against the rubric (accept/revise/abstain/escalate); the tool tallies " +
     "mechanically and ranks the majority-accept shortlist. Starts a caller-managed run " +
-    "and returns the first wave of jobs. Exits 0 on handoff or decision, 2 invalid invocation.",
+    "and returns the first wave of jobs. Exit codes follow the shared command contract.",
   options: [
     {
       default: String(SHORTLIST_DEFAULT_GENERATORS),

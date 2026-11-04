@@ -1,6 +1,6 @@
 # Go/No-Go
 
-`fusion gonogo --task <t> [--reviewers N] [--timeout <sec>] [--json]`
+`fusion gonogo --task <t> [--reviewers N] [--timeout <sec>] [--harness <hint>] [--model <hint>] [--roster <harness:model>] [--json]`
 
 ## What it is for
 
@@ -38,19 +38,22 @@ isolation is caller-enforced.
 `decision` (the verdict), `vetoRule`, `blockingConcerns` (each block with
 its concern, action, falsifier, reviewer), `constraints` (the union),
 `positions` (every reviewer's position with provenance on the claim),
-`reviewers`.
+`reviewers`, `provenanceLimits`.
 
 ## Guarantees and limits
 
 - Guaranteed: the veto is a mechanical property of the tally, not a
   judgment; blocks carry falsifiers so the gate says what would reopen
-  it; no cross-reviewer visibility - stage inputs are anonymized and
-  there is only one wave.
+  it. Fusion issues only the task in reviewer briefs. The caller enforces
+  separate worker contexts.
 - Limits: one wave, no appeal path - a blocked gate is re-run as a new
   gate once the falsifier is satisfied; reviewers judge the artifact
   through the task text and their own repo access, so the task must name
   what to inspect.
 
+Identity is caller-reported and isolation is caller-enforced. The decision's
+`provenanceLimits` records both limits. Fusion cannot prove worker independence.
+
 ## Run artifacts
 
-`.fusion/runs/<runId>/` - `run.json`, `events.ndjson`, `decision.json`.
+`.fusion/runs/<runId>/` - `run.json`, `state.json`, `events.ndjson`, `decision.json`.

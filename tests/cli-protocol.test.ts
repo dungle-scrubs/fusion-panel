@@ -4,7 +4,7 @@
  * (start -> submit per job -> status across invocations -> decision) and
  * rejects the protocol's negative cases (ADR-0003).
  */
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -16,6 +16,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { buildSync } from "esbuild";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 const REPO = process.cwd();
@@ -24,7 +25,13 @@ const CLI = join(REPO, "dist", "cli.js");
 let root = "";
 
 beforeAll(() => {
-  execFileSync("pnpm", ["build"], { cwd: REPO, stdio: "pipe" });
+  buildSync({
+    entryPoints: [join(REPO, "src", "cli.ts")],
+    outfile: CLI,
+    bundle: true,
+    platform: "node",
+    format: "esm",
+  });
 }, 60000);
 
 beforeEach(() => {
@@ -50,6 +57,7 @@ function fusionJson(args: string[], input?: string): { code: number | null; body
     cwd: root,
     encoding: "utf8",
     input,
+    env: { ...process.env, PATH: join(root, "no-executables") },
   });
   const lines = proc.stdout
     .trim()
@@ -60,7 +68,12 @@ function fusionJson(args: string[], input?: string): { code: number | null; body
 }
 
 function fusionText(args: string[], input?: string): { code: number | null; out: string } {
-  const proc = spawnSync(process.execPath, [CLI, ...args], { cwd: root, encoding: "utf8", input });
+  const proc = spawnSync(process.execPath, [CLI, ...args], {
+    cwd: root,
+    encoding: "utf8",
+    input,
+    env: { ...process.env, PATH: join(root, "no-executables") },
+  });
   return { code: proc.status, out: proc.stdout };
 }
 
@@ -347,6 +360,11 @@ describe("delphi lifecycle", () => {
 
     const round2Wave = fusionJson(["status", "--run", runId]);
     expect(jobIds(round2Wave.body)).toEqual(["challenge:w1-r2", "challenge:w2-r2"]);
+    for (const job of round2Wave.body.jobs ?? []) {
+      expect(job.prompt).not.toContain('"provenance":');
+      expect(job.prompt).not.toContain(identity.model);
+      expect(job.prompt).not.toContain(identity.sessionId);
+    }
     const revise = (novelty: string): string =>
       ok([
         {
@@ -391,6 +409,9 @@ describe("shortlist lifecycle", () => {
     const judgePrompt = judgeWave.body.jobs?.[0]?.prompt ?? "";
     expect(judgePrompt).toContain('"claim_id":"w-prop-1:C1"');
     expect(judgePrompt).toContain("blind judge");
+    expect(judgePrompt).not.toContain('"provenance":');
+    expect(judgePrompt).not.toContain(identity.model);
+    expect(judgePrompt).not.toContain(identity.sessionId);
 
     const verdicts = (option: string): string =>
       ok([
@@ -714,7 +735,7 @@ describe("negative cases", () => {
     expect(okNow.body.ok).toBe(true);
   });
 
-  it("concurrent submissions of different jobs never lose an accepted result", () => {
+  it("concurrent submissions of different jobs never lose an accepted result", async () => {
     const start = startRun("gonogo", ["--task", "contention", "--reviewers", "2"]);
     const runId = start.runId as string;
     const payload = (worker: string): string =>
@@ -722,24 +743,33 @@ describe("negative cases", () => {
         ...identity,
         sessionId: `sess-${worker}`,
       });
-    const first = spawnSync(
-      process.execPath,
-      [CLI, "submit", "--run", runId, "--job", "generate:w-gate-1", "--json"],
-      {
-        cwd: root,
-        encoding: "utf8",
-        input: payload("one"),
-      },
-    );
-    const second = spawnSync(
-      process.execPath,
-      [CLI, "submit", "--run", runId, "--job", "generate:w-gate-2", "--json"],
-      {
-        cwd: root,
-        encoding: "utf8",
-        input: payload("two"),
-      },
-    );
+    function concurrentSubmit(
+      job: string,
+      who: string,
+    ): Promise<{ status: number | null; stdout: string }> {
+      return new Promise((resolve, reject) => {
+        const proc = spawn(
+          process.execPath,
+          [CLI, "submit", "--run", runId, "--job", job, "--json"],
+          {
+            cwd: root,
+            env: { ...process.env, PATH: join(root, "no-executables") },
+          },
+        );
+        let stdout = "";
+        proc.stdout.setEncoding("utf8");
+        proc.stdout.on("data", (text: string) => {
+          stdout += text;
+        });
+        proc.on("error", reject);
+        proc.on("close", (status) => resolve({ status, stdout }));
+        proc.stdin.end(payload(who));
+      });
+    }
+    const [first, second] = await Promise.all([
+      concurrentSubmit("generate:w-gate-1", "one"),
+      concurrentSubmit("generate:w-gate-2", "two"),
+    ]);
     expect(first.status).not.toBeNull();
     expect(second.status).not.toBeNull();
     // A busy rejection is legal; retry it explicitly. Accepted results survive.
@@ -760,6 +790,114 @@ describe("negative cases", () => {
     const events = readFileSync(join(root, ".fusion", "runs", runId, "events.ndjson"), "utf8");
     expect(events).toContain("sess-one");
     expect(events).toContain("sess-two");
+  });
+});
+
+describe("method submission contracts", () => {
+  it.each([
+    { method: "jury", args: ["--workers", "2"], kind: "evidence" },
+    { method: "delphi", args: ["--workers", "2"], kind: "evidence" },
+    { method: "ach", args: ["--workers", "2"], kind: "answer" },
+    { method: "gonogo", args: ["--reviewers", "2"], kind: "finding" },
+    {
+      method: "shortlist",
+      args: ["--generators", "2", "--rubric", "usefulness"],
+      kind: "evidence",
+    },
+    { method: "red-blue", args: ["--burden", "evidence"], kind: "objection" },
+  ])("rejects claims outside $method's worker role before acceptance", ({ method, args, kind }) => {
+    const started = startRun(method, ["--task", "role contract", ...args]);
+    const runId = started.runId as string;
+    const jobId = started.jobs?.[0]?.jobId as string;
+    const out = submit(runId, jobId, ok([answerClaim("invalid role", { kind })]));
+    expect(out.code).toBe(2);
+    expect(out.body.errors?.[0]?.code).toBe("E201");
+    expect(jobIds(fusionJson(["status", "--run", runId]).body)).toEqual(jobIds(started));
+  });
+
+  it("keeps a malformed gate position pending so a corrected NO-GO cannot disappear", () => {
+    const started = startRun("gonogo", ["--task", "release", "--reviewers", "2"]);
+    const runId = started.runId as string;
+    const block = answerClaim("block", { kind: "finding", requested_action: "escalate" });
+    expect(submit(runId, "generate:w-gate-1", ok([block])).code).toBe(2);
+    expect(submit(runId, "generate:w-gate-1", ok([{ ...block, kind: "answer" }])).code).toBe(0);
+    const final = submit(
+      runId,
+      "generate:w-gate-2",
+      ok([answerClaim("go", { requested_action: "accept" })]),
+    );
+    expect(final.body.decision).toMatchObject({ decision: "NO-GO", reviewers: 2 });
+  });
+
+  it("rejects a non-objection from the red-blue opponent", () => {
+    const started = startRun("red-blue", ["--task", "review", "--burden", "evidence"]);
+    const runId = started.runId as string;
+    submit(runId, "generate:w-red", ok([answerClaim("claim")]));
+    const out = submit(
+      runId,
+      "challenge:w-blue",
+      ok([answerClaim("challenge", { kind: "finding" })]),
+    );
+    expect(out.body.errors?.[0]?.code).toBe("E201");
+    expect(jobIds(fusionJson(["status", "--run", runId]).body)).toEqual(["challenge:w-blue"]);
+  });
+
+  it.each(["jury", "delphi"])("keeps off-vocabulary %s answers pending", (method) => {
+    const started = startRun(method, [
+      "--task",
+      "choose",
+      "--workers",
+      "2",
+      "--vocabulary",
+      "ship,hold",
+    ]);
+    const runId = started.runId as string;
+    expect(submit(runId, "generate:w1", ok([answerClaim("maybe")])).body.errors?.[0]?.code).toBe(
+      "E201",
+    );
+    expect(submit(runId, "generate:w1", ok([answerClaim("ship")])).code).toBe(0);
+    const next = submit(runId, "generate:w2", ok([answerClaim("hold")]));
+    if (method === "delphi") {
+      expect(
+        submit(runId, "challenge:w1-r2", ok([answerClaim("maybe")])).body.errors?.[0]?.code,
+      ).toBe("E201");
+    } else {
+      expect(next.body.status).toBe("done");
+    }
+  });
+
+  it("recognizes accepted and failed submissions from an earlier wave as replays", () => {
+    const started = startRun("delphi", ["--task", "estimate", "--workers", "2"]);
+    const runId = started.runId as string;
+    submit(runId, "generate:w1", ok([answerClaim("one")]));
+    const next = submit(runId, "generate:w2", fail("timeout"));
+    for (const jobId of ["generate:w1", "generate:w2"]) {
+      const replay = submit(runId, jobId, ok([answerClaim("replay")]));
+      expect(replay.code).toBe(2);
+      expect(replay.body.errors?.[0]?.code).toBe("E204");
+    }
+    expect(jobIds(fusionJson(["status", "--run", runId]).body)).toEqual(jobIds(next.body));
+  });
+
+  it("collects repeated roster hints and reports limits in terminal human output", () => {
+    const started = startRun("jury", [
+      "--task",
+      "choose",
+      "--workers",
+      "2",
+      "--roster",
+      "one:m1",
+      "--roster",
+      "two:m2",
+    ]);
+    expect(started.jobs?.[0]).toMatchObject({ harness: "one", model: "m1" });
+    expect(started.jobs?.[1]).toMatchObject({ harness: "two", model: "m2" });
+    const runId = started.runId as string;
+    submit(runId, "generate:w1", ok([answerClaim("ship")]));
+    submit(runId, "generate:w2", ok([answerClaim("ship")]));
+    const text = fusionText(["status", "--run", runId]).out;
+    expect(text).toContain("caller-enforced");
+    expect(text).toContain("caller-reported");
   });
 });
 

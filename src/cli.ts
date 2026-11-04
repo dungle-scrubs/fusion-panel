@@ -504,6 +504,9 @@ function rebuildFromRegistration(reg: RunRegistration): ReturnType<PatternRebuil
   }
   return {
     ...(built.stages !== undefined ? { stages: built.stages } : {}),
+    ...(built.validateSubmission !== undefined
+      ? { validateSubmission: built.validateSubmission }
+      : {}),
     fuse: built.fuse,
   };
 }
@@ -558,8 +561,8 @@ function terminalLines(view: RunView): readonly string[] {
     if (typeof decision["note"] === "string") {
       lines.push(`note     ${decision["note"]}`);
     }
-    lines.push(`isolation ${PROVENANCE_LIMITS.isolation}`);
   }
+  lines.push(`isolation ${PROVENANCE_LIMITS.isolation}`, `identity  ${PROVENANCE_LIMITS.identity}`);
   return lines;
 }
 
@@ -600,7 +603,11 @@ for (const definition of PATTERNS) {
       continue;
     }
     const flag = `--${spec.name} <${spec.name}>`;
-    if (spec.required === true) {
+    if (spec.name === "roster") {
+      command.option(flag, spec.description, (value: string, previous: string | undefined) =>
+        previous === undefined ? value : `${previous},${value}`,
+      );
+    } else if (spec.required === true) {
       command.requiredOption(flag, spec.description);
     } else if (spec.default !== undefined) {
       command.option(flag, spec.description, spec.default);

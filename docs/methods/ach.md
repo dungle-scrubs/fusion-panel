@@ -1,6 +1,6 @@
 # ACH Matrix
 
-`fusion ach --task <t> [--workers N] [--timeout <sec>] [--evidence <file>] [--json]`
+`fusion ach --task <t> [--workers N] [--timeout <sec>] [--evidence <file>] [--harness <hint>] [--model <hint>] [--roster <harness:model>] [--json]`
 
 ## What it is for
 
@@ -62,6 +62,11 @@ Isolation between analysts is caller-enforced.
   matrix is block-diagonal - each analyst's evidence bears only on their
   own hypotheses, and every item is "diagnostic" against the union. Cross-
   worker synthesis is tier 2 model work, deliberately absent.
+
+Identity is caller-reported and isolation is caller-enforced. The decision's
+`provenanceLimits` records both limits. Opaque worker slots remain visible in
+claim references, but harness, model and session metadata are removed from
+later-stage records.
 
 ## Run artifacts
 

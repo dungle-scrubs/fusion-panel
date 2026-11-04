@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { AcceptedClaim, FusedOutput, RunReport, StageInput } from "./engine";
 import {
+  checkClaimKinds,
   DEFAULT_HARNESS_HINT,
   diversityCounts,
   EVIDENCE_OPTION,
@@ -107,14 +108,15 @@ export function umpirePrompt(input: StageInput): string {
 export function judgePrompt(burden: string, input: StageInput): string {
   return [
     "You are the judge in a red-blue adversarial review.",
-    "You see the anonymized record: claims, objections, and umpire rulings.",
-    "Worker identity and model are hidden from you; judge the record only.",
+    "You see the anonymized record: claims and objections.",
+    "The umpire works in the same wave; you do not see its rulings.",
+    "Harness, model, and session metadata are hidden from you; role IDs remain visible.",
     `BURDEN: ${burden}`,
     "",
     "RECORD (one JSON per line):",
     claimsBlock(input.anonymizedClaims),
     "",
-    "Score the SURVIVING claims against the burden and reply with EXACTLY ONE",
+    "Assess the claims and objections against the burden and reply with EXACTLY ONE",
     'JSON object: claim_id "C1", kind "answer", claim (the ruling, one to three',
     "sentences naming what survives and what does not), status",
     '("observed"|"documented"|"inferred"|"unknown"), confidence [0,1],',
@@ -297,6 +299,12 @@ export const redblueDefinition: PatternDefinition = {
     };
     return {
       fuse: redblueFuse,
+      validateSubmission(job, claims) {
+        if (job.workerId === "w-blue") return checkClaimKinds(claims, ["objection"]);
+        if (job.workerId === "w-umpire") return checkClaimKinds(claims, ["evidence"]);
+        if (job.workerId === "w-judge") return checkClaimKinds(claims, ["answer"], 1);
+        return checkClaimKinds(claims, ["answer", "evidence", "finding", "hypothesis"]);
+      },
       rubric: burden,
       stages: {
         challenge: (input) => redblueWorkers(patternOptions, input, "challenge", roleRoster),
@@ -322,7 +330,7 @@ export const redblueDefinition: PatternDefinition = {
     "challenges with objection claims, an umpire resolves source facts (running " +
     "named executable checks), and a judge blind to worker identity scores the " +
     "surviving record against the burden. Starts a caller-managed run and returns " +
-    "the first wave of jobs. Exits 0 on handoff or decision, 2 invalid invocation.",
+    "the first wave of jobs. Exit codes follow the shared command contract.",
   options: [
     { description: "the standard the surviving record must meet", name: "burden", required: true },
     HARNESS_OPTION,
