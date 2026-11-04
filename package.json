@@ -1,6 +1,6 @@
 {
   "name": "@dungle-scrubs/fusion-panel",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "A composable fusion layer over agent harnesses: consensus you can audit.",
   "type": "module",
   "bin": {
