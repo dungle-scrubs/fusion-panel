@@ -163,6 +163,8 @@ export function shortlistFuse(accepted: readonly AcceptedClaim[]): FusedOutput &
       if (tally === undefined) {
         continue;
       }
+      // One verdict scores one option: the first canonical it targets, and
+      // only once per judge. Both exits leave the loop deliberately.
       const key = `${verdict.workerId}\u0000${canonical}`;
       if (counted.has(key)) {
         break;

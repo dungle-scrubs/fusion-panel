@@ -11,6 +11,11 @@ pnpm install
 Requires Node 22+ and pnpm. Pattern commands return jobs for the calling
 harness to execute. Development and panel runs do not require `hcn`.
 
+`pnpm install` installs the git hooks through lefthook. The pre-commit hook
+runs biome and tsc. The pre-push hook runs [trufflehog](https://github.com/trufflesecurity/trufflehog)
+against the repository, so install it (`brew install trufflehog`) before
+your first push.
+
 ## Everyday commands
 
 ```console
