@@ -129,9 +129,9 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`fe
 
 ## Status
 
-All six patterns use caller-managed delegation in this checkout. This change
-has not been published to npm. The caller handles worker questions and session
-continuation. Multi-round Delphi and the calibration store remain deferred.
+All six patterns use caller-managed delegation, published as 0.3.0 and later.
+The caller handles worker questions and session continuation. Multi-round
+Delphi and the calibration store remain deferred.
 
 ## License
 
