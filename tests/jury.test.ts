@@ -33,6 +33,22 @@ describe("juryWorkerPrompt", () => {
 });
 
 describe("juryFuse", () => {
+  it("flags a tie that definition order broke", () => {
+    const tied = juryFuse([answer("w1", "hold"), answer("w2", "ship")]);
+    expect(tied.decision.decision).toBe("hold");
+    expect(tied.decision.tie).toBe(true);
+    expect(tied.fusion["tie"]).toBe(true);
+    const clear = juryFuse([answer("w1", "hold"), answer("w2", "ship"), answer("w3", "hold")]);
+    expect(clear.decision.tie).toBe(false);
+    const lines = juryDefinition.summarize(tied.decision, {
+      cause: "clean",
+      decision: {},
+      runDir: "d",
+      runId: "r",
+    });
+    expect(lines[1]).toBe("decision hold (tie; definition order decided)");
+  });
+
   it("groups equivalent answers and decides by plurality", () => {
     const result = juryFuse([
       answer("w1", "Ship it. The fix is verified."),

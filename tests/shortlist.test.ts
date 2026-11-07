@@ -21,6 +21,24 @@ function claim(
   };
 }
 
+const optionA = claim("generate", "w-prop-1", { claim: "Option A", claim_id: "w-prop-1:C1" });
+const optionB = claim("generate", "w-prop-2", { claim: "Option B", claim_id: "w-prop-2:C1" });
+const optionA_dup = claim("generate", "w-prop-3", { claim: "option a", claim_id: "w-prop-3:C1" });
+
+const verdict = (
+  workerId: string,
+  target: string,
+  action: string,
+  extra: Record<string, unknown> = {},
+) =>
+  claim("challenge", workerId, {
+    claim: "note",
+    claim_id: "C1",
+    dependencies: [target],
+    requested_action: action,
+    ...extra,
+  });
+
 describe("shortlist prompts", () => {
   it("generator prompt bans provenance and asks for distinct options", () => {
     const prompt = generatorPrompt("name a launch strategy");
@@ -41,30 +59,26 @@ describe("shortlist prompts", () => {
     expect(prompt).toContain("dependencies: [the option's id exactly as listed below]");
     expect(prompt).toContain("w-prop-1:C1");
   });
+
+  it("judge prompt lists an option two proposers filed once, under its first-seen id", () => {
+    const prompt = judgePrompt(
+      "t",
+      "r",
+    )({
+      anonymizedClaims: [
+        { claim_id: "w-prop-1:C1", claim: "Option A" },
+        { claim_id: "w-prop-2:C1", claim: "option a" },
+        { claim_id: "w-prop-3:C1", claim: "Option B" },
+      ],
+      byWorker: new Map(),
+    });
+    expect(prompt).toContain("w-prop-1:C1");
+    expect(prompt).not.toContain("w-prop-2:C1");
+    expect(prompt).toContain("w-prop-3:C1");
+  });
 });
 
 describe("shortlistFuse", () => {
-  const optionA = claim("generate", "w-prop-1", { claim: "Option A", claim_id: "w-prop-1:C1" });
-  const optionB = claim("generate", "w-prop-2", { claim: "Option B", claim_id: "w-prop-2:C1" });
-  const optionA_dup = claim("generate", "w-prop-3", {
-    claim: "option a",
-    claim_id: "w-prop-3:C1",
-  });
-
-  const verdict = (
-    workerId: string,
-    target: string,
-    action: string,
-    extra: Record<string, unknown> = {},
-  ) =>
-    claim("challenge", workerId, {
-      claim: "note",
-      claim_id: "C1",
-      dependencies: [target],
-      requested_action: action,
-      ...extra,
-    });
-
   it("advances majority-accept options and ranks them", () => {
     const result = shortlistFuse([
       optionA,
@@ -101,6 +115,31 @@ describe("shortlistFuse", () => {
     expect(result.decision["unscored"]).toEqual(["option b"]);
     expect(result.decision["residualRisks"]).toEqual([
       { canonical: "option b", reason: "unscored by any judge" },
+    ]);
+  });
+
+  it("a judge counts once per option, whichever copies it cited", () => {
+    const result = shortlistFuse([
+      optionA,
+      optionA_dup,
+      optionB,
+      verdict("w-judge-1", "w-prop-1:C1", "accept"),
+      claim("challenge", "w-judge-1", {
+        claim: "note",
+        claim_id: "C2",
+        dependencies: ["w-prop-3:C1"],
+        requested_action: "accept",
+      }),
+      verdict("w-judge-1", "w-prop-2:C1", "accept", { confidence: 1 }),
+      verdict("w-judge-2", "w-prop-2:C1", "accept", { confidence: 1 }),
+    ]);
+    const shortlist = result.decision["shortlist"] as {
+      canonical: string;
+      tally: { accepts: number };
+    }[];
+    expect(shortlist.map((s) => [s.canonical, s.tally.accepts])).toEqual([
+      ["option b", 2],
+      ["option a", 1],
     ]);
   });
 
@@ -142,6 +181,34 @@ describe("shortlist definition", () => {
     expect(wave).toHaveLength(2);
     expect(wave?.[0]?.workerId).toBe("w-judge-1");
     expect(wave?.[0]?.prompt).toContain("RUBRIC: two-week cost");
+  });
+
+  it("judges cover the listed representatives only, not every proposer's copy", () => {
+    const build = shortlistDefinition.build({ rubric: "r", task: "t" });
+    expect("error" in build).toBe(false);
+    if ("error" in build) {
+      return;
+    }
+    const accepted = [optionA, optionA_dup, optionB];
+    const job = {
+      jobId: "challenge:w-judge-1",
+      prompt: "p",
+      stage: "challenge",
+      timeoutSec: 1,
+      workerId: "w-judge-1",
+    } as const;
+    const covering = [
+      verdict("w-judge-1", "w-prop-1:C1", "accept").claim,
+      { ...verdict("w-judge-1", "w-prop-2:C1", "accept").claim, claim_id: "C2" },
+    ];
+    expect(build.validateSubmission(job, covering, accepted)).toEqual([]);
+    const citingTheCopy = [
+      verdict("w-judge-1", "w-prop-3:C1", "accept").claim,
+      { ...verdict("w-judge-1", "w-prop-2:C1", "accept").claim, claim_id: "C2" },
+    ];
+    const errors = build.validateSubmission(job, citingTheCopy, accepted);
+    expect(errors.some((e) => e.includes("w-prop-3:C1 is not a target"))).toBe(true);
+    expect(errors.some((e) => e.includes("missing verdict for target w-prop-1:C1"))).toBe(true);
   });
 
   it("rejects missing rubric and undersized panels", () => {

@@ -25,10 +25,12 @@ caller-enforced.
 1. **Round 1** (generate stage): N sealed workers, one `kind=answer`
    claim each.
 2. **Round 2** (the challenge wave, used as the revision round): each
-   worker gets a fresh job that shows its OWN round-1 answer plus the
-   full anonymized panel record - blind to the other panelists'
-   identities and models. It revises or keeps its position, with
-   `novelty` stating which (`confirms` = kept, `new` = revised).
+   worker with an accepted round-1 answer gets a fresh job that shows its
+   OWN round-1 answer plus the full anonymized panel record - blind to
+   the other panelists' identities and models. It revises or keeps its
+   position, with `novelty` stating which (`confirms` = kept, `new` =
+   revised). A worker that failed round 1 has no position to revise and
+   gets no round-2 job.
 3. Mechanical fusion, tier 1 canonicalization throughout:
    - **convergence** - duplicate rate within round 2: did wording-level
      groups collapse toward agreement?
@@ -49,7 +51,10 @@ leaves the job pending for correction. The decision records the vocabulary.
 `decision`, `delphi` (both rounds' answers/groups, convergence, stability),
 `minorityReport` (losing round-2 groups with members and novelty),
 `residualRisks` (minority answers with confidence >= 0.6 or their own
-escalate/revise vote), `pattern`.
+escalate/revise vote), `tie` (true when another round-2 group matched the
+winner's votes and definition order decided), `pattern`. When every round-2
+job fails, the run still completes with `decision` null; read `delphi.round2`
+before trusting a null.
 
 ## Guarantees and limits
 

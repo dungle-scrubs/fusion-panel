@@ -174,6 +174,10 @@ export function delphiFuse(
       winner = group;
     }
   }
+  const topVotes = winner?.members.length ?? 0;
+  const tie =
+    winner !== null &&
+    [...round2Groups.values()].filter((g) => g.members.length === topVotes).length > 1;
   const minority = [...round2Groups.values()].filter((g) => g !== winner);
 
   const residualRisks = minority.flatMap((group) =>
@@ -218,12 +222,14 @@ export function delphiFuse(
       pattern: "delphi",
       rejectedOptions,
       residualRisks,
+      tie,
     },
     fusion: {
       convergenceRate,
       round1Groups: round1Groups.size,
       round2Groups: round2Groups.size,
       stabilityRate,
+      tie,
     },
   };
 }
@@ -285,17 +291,21 @@ export const delphiDefinition: PatternDefinition = {
         return errors;
       },
       stages: {
+        // Round 2 goes only to workers with an accepted round-1 answer: a
+        // worker that failed round 1 has no position to revise.
         challenge: (input: StageInput) =>
-          Array.from({ length: workers }, (_, index) => ({
-            ...base(index),
-            prompt: delphiRound2Prompt(
-              task,
-              input.byWorker.get(`w${index + 1}`) ?? [],
-              input.anonymizedClaims,
-              vocabulary,
-            ),
-            workerId: `w${index + 1}-r2`,
-          })),
+          Array.from({ length: workers }, (_, index) => index)
+            .filter((index) => input.byWorker.has(`w${index + 1}`))
+            .map((index) => ({
+              ...base(index),
+              prompt: delphiRound2Prompt(
+                task,
+                input.byWorker.get(`w${index + 1}`) ?? [],
+                input.anonymizedClaims,
+                vocabulary,
+              ),
+              workerId: `w${index + 1}-r2`,
+            })),
       },
       stoppingRule:
         "every worker answers round 1 and revises in round 2, or the caller reports its failure",
@@ -333,7 +343,7 @@ export const delphiDefinition: PatternDefinition = {
     const stats = decision["delphi"] as DelphiStats | undefined;
     const lines = [
       `run      ${report.runId} (${report.runDir})`,
-      `decision ${String(decision["decision"] ?? "(none)")}`,
+      `decision ${String(decision["decision"] ?? "(none)")}${decision["tie"] === true ? " (tie; definition order decided)" : ""}`,
     ];
     if (stats !== undefined) {
       lines.push(

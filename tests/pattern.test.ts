@@ -230,6 +230,19 @@ describe("red-blue definition", () => {
     expect(lines.join("\n")).toContain("verdict  accept");
     expect(lines.join("\n")).toContain('["w-red:C1"]');
   });
+
+  it("summarizes each rejected claim from the decision's rejectedOptions", () => {
+    const lines = redblueDefinition.summarize(
+      {
+        decision: "C1 falls",
+        judgeVerdict: "revise",
+        rejectedOptions: [{ claimId: "w-red:C1", reason: "objection w-blue:C1 sustained" }],
+        survivingClaims: [],
+      },
+      reportOf(),
+    );
+    expect(lines).toContain("rejected w-red:C1: objection w-blue:C1 sustained");
+  });
 });
 
 describe("ach definition", () => {
