@@ -233,4 +233,9 @@ Rules that bind every caller:
   - Privacy: work that puts secret material into model context runs on
     local models only. You choose the routing, so routing secret
     material to a hosted model through a fusion run is a caller error.
+  - Worker access: panel workers judge, they do not write. Give each
+    job read-only access and none of your own session's terminal or
+    pane identity. Widen access only for a role whose brief runs named
+    checks, such as the red-blue umpire, and only to what those checks
+    need.
 `;

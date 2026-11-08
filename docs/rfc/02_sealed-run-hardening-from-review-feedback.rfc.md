@@ -162,4 +162,4 @@ Informative:
 - `docs/methods/jury.md` - the exact-match limit as documented today.
 - `docs/methods/tier-1.md` - the model-free boundary this RFC preserves.
 - Reviewer feedback thread, 2026-09-24 - the three gaps as reported.
-- `fusion-panel-design-space.md` (this repo) - merge and roster background.
+- `docs/design/fusion-panel-design-space.md` - merge and roster background.

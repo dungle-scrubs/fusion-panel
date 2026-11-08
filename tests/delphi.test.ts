@@ -198,14 +198,41 @@ describe("delphi definition", () => {
     if (build.stages?.challenge === undefined) {
       return;
     }
+    const own = (id: string) => [{ claim: `answer ${id}`, claim_id: `${id}:C1` }];
     const wave = build.stages.challenge({
       anonymizedClaims: [],
-      byWorker: new Map([["w1", [{ claim: "own answer", claim_id: "C1" }]]]),
+      byWorker: new Map([
+        ["w1", own("w1")],
+        ["w2", own("w2")],
+        ["w3", own("w3")],
+      ]),
     });
     expect(wave).toHaveLength(3);
     expect(wave[0]?.workerId).toBe("w1-r2");
     expect(wave[0]?.prompt).toContain("YOUR ROUND-1 ANSWER:");
+    expect(wave[0]?.prompt).toContain("answer w1");
     expect(wave[1]?.prompt).toContain("PANEL RECORD");
+    // a worker that failed round 1 has nothing to revise and gets no round-2 job
+    const partial = build.stages.challenge({
+      anonymizedClaims: [],
+      byWorker: new Map([
+        ["w1", own("w1")],
+        ["w3", own("w3")],
+      ]),
+    });
+    expect(partial.map((job) => job.workerId)).toEqual(["w1-r2", "w3-r2"]);
+  });
+
+  it("flags a round-2 tie that definition order broke", () => {
+    const tied = delphiFuse([
+      claim("generate", "w1", { claim: "ship" }),
+      claim("generate", "w2", { claim: "hold" }),
+      claim("challenge", "w1-r2", { claim: "ship" }),
+      claim("challenge", "w2-r2", { claim: "hold" }),
+    ]);
+    expect(tied.decision["decision"]).toBe("ship");
+    expect(tied.decision["tie"]).toBe(true);
+    expect(tied.fusion["tie"]).toBe(true);
   });
 
   it("rejects bad args", () => {

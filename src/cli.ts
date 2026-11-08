@@ -96,6 +96,9 @@ async function readInput(file: string | undefined): Promise<string> {
   if (file !== undefined) {
     return readFileSync(file, "utf8");
   }
+  if (stdin.isTTY === true) {
+    throw new Error("no input file given and stdin is a terminal; pass a file or pipe JSON");
+  }
   return readStdin();
 }
 
@@ -122,15 +125,16 @@ async function runCommand(
     const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
     envelope = envelopeFail(run, command, [{ code: "E499", detail }]);
   }
-  if (envelope.ok && payload !== undefined) {
-    if (json) {
-      stdout.write(`${JSON.stringify({ ...envelope, ...payload })}\n`);
-    } else {
-      const lines = payload["lines"] as readonly string[] | undefined;
-      if (lines !== undefined) {
-        for (const line of lines) {
-          stdout.write(`${line}\n`);
-        }
+  // A payload rides with the envelope whatever the outcome in --json mode
+  // (validate reports every claim's verdict beside its E201 lines); human
+  // output prints the payload lines on success and the error lines on failure.
+  if (json && payload !== undefined) {
+    stdout.write(`${JSON.stringify({ ...envelope, ...payload })}\n`);
+  } else if (envelope.ok && payload !== undefined) {
+    const lines = payload["lines"] as readonly string[] | undefined;
+    if (lines !== undefined) {
+      for (const line of lines) {
+        stdout.write(`${line}\n`);
       }
     }
   } else {
@@ -261,7 +265,7 @@ program
 
 program
   .command("validate")
-  .description("Validate a JSONL stream of claims against the claim schema. " + EXIT_HELP_TEXT)
+  .description(`Validate a JSONL stream of claims against the claim schema. ${EXIT_HELP_TEXT}`)
   .argument("[file]", "JSONL file of claims; reads stdin when omitted")
   .option("--json", "emit the machine-shaped envelope with per-claim verdicts")
   .action(async (file: string | undefined, options: { json: boolean }) => {
@@ -416,7 +420,7 @@ function parseCitationsExport(text: string): DrCitations {
 
 program
   .command("score")
-  .description("Proper scoring rules (Brier, log) over resolved outcomes. " + EXIT_HELP_TEXT)
+  .description(`Proper scoring rules (Brier, log) over resolved outcomes. ${EXIT_HELP_TEXT}`)
   .argument("[file]", "JSON file of resolved outcomes; reads stdin when omitted")
   .option("--json", "emit the machine-shaped envelope")
   .action(async (file: string | undefined, options: { json: boolean }) => {
@@ -687,7 +691,7 @@ program
 program
   .command("status")
   .description(
-    "Show a run's pending jobs or its terminal decision, across invocations. " + EXIT_HELP_TEXT,
+    `Show a run's pending jobs or its terminal decision, across invocations. ${EXIT_HELP_TEXT}`,
   )
   .requiredOption("--run <runId>", "panel run id (r........)")
   .option("--json", "emit the machine-shaped envelope with the run handoff")
@@ -707,7 +711,7 @@ program
 program
   .command("abort")
   .description(
-    "Abort a pending run, recording a failed terminal decision with your reason. " + EXIT_HELP_TEXT,
+    `Abort a pending run, recording a failed terminal decision with your reason. ${EXIT_HELP_TEXT}`,
   )
   .requiredOption("--run <runId>", "panel run id (r........)")
   .requiredOption("--reason <text>", "why the run is aborted; kept in the decision record")

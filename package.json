@@ -13,15 +13,14 @@
     "test": "vitest run",
     "validate:samples": "node dist/cli.js validate --json tests/fixtures/valid-jury.jsonl"
   },
-  "dependencies": {
-    "commander": "^15.0.0"
-  },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.14",
-    "@types/node": "^26.6.2",
+    "@biomejs/biome": "^2.6.6",
+    "@types/node": "^26.6.6",
+    "commander": "^15.0.0",
     "esbuild": "^0.28.2",
+    "lefthook": "^2.2.2",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.1"
+    "vitest": "^5.1.0"
   },
   "packageManager": "pnpm@11.9.0",
   "engines": {

@@ -188,7 +188,9 @@ function localIdOf(raw: unknown): string | null {
 /**
  * Strip run-scope prefixes so the flat schema validator sees bare ids.
  * Storage keeps prefixed dependencies (they reference stamped record
- * claims); a copied prefixed claim_id normalizes to its local form.
+ * claims); a claim_id prefixed with the submitting worker's own scope
+ * normalizes to its local form. Another worker's scope is rejected
+ * before this runs.
  */
 function bareClaim(raw: unknown): Record<string, unknown> {
   if (!isRecord(raw)) {
@@ -250,6 +252,13 @@ export function validateSuccessClaims(
   for (const raw of claims) {
     if (!isRecord(raw)) {
       errors.push("claim must be a JSON object");
+      continue;
+    }
+    const foreign = typeof raw["claim_id"] === "string" ? scopedParts(raw["claim_id"]) : null;
+    if (foreign !== null && foreign.workerId !== workerId) {
+      errors.push(
+        `${foreign.local}: claim_id "${raw["claim_id"]}" belongs to worker ${foreign.workerId}; your own claim ids are bare C-numbers`,
+      );
       continue;
     }
     const bare = bareClaim(raw);

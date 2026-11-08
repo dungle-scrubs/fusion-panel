@@ -40,9 +40,12 @@ jobs:
           cache: pnpm
 
       - name: Update npm (OIDC requires 11.5.1+)
-        run: npm install -g npm@latest
+        run: npm install -g npm@12.2.2
 
       - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
       - run: pnpm build
 
       - name: Publish with OIDC provenance

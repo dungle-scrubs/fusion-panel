@@ -59,6 +59,8 @@ back to the unmerged tally.
   enter the completed decision.
 - `residualRisks` - minority answers with confidence >= 0.6 or their own
   escalate/revise vote, each with its falsifier
+- `tie` - true when another group matched the winner's votes and
+  definition order decided; treat such a decision as unsettled
 - `provenanceLimits` - identity is caller-reported and isolation is
   caller-enforced; fusion cannot verify either
 

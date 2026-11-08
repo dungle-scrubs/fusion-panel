@@ -193,6 +193,8 @@ export interface JuryDecision extends FusedOutput {
     readonly pattern: "jury";
     readonly rejectedOptions: readonly { claimId: string; reason: string }[];
     readonly residualRisks: readonly { claimId: string; confidence: number; falsifier: string }[];
+    /** True when another group matched the winner's votes and definition order broke the tie. */
+    readonly tie: boolean;
   };
 }
 
@@ -293,6 +295,8 @@ export function juryFuse(
       winner = group;
     }
   }
+  const topVotes = winner?.votes ?? 0;
+  const tie = winner !== null && tallyGroups.filter((g) => g.votes === topVotes).length > 1;
 
   const minority = tallyGroups.filter((group) => group !== winner);
   const residualRisks = minority.flatMap((group) =>
@@ -327,12 +331,14 @@ export function juryFuse(
       pattern: "jury",
       rejectedOptions,
       residualRisks,
+      tie,
     },
     fusion: {
       duplicateRate,
       groups: tallyGroups.map((g) => ({ canonical: g.canonical, votes: g.votes })),
       merged: merged !== null,
       method: "plurality",
+      tie,
       unmergedGroups: juryGroups.map((g) => ({ canonical: g.canonical, votes: g.votes })),
       winner: winner?.canonical ?? null,
     },
@@ -502,7 +508,7 @@ export const juryDefinition: PatternDefinition = {
   summarize(decision, report: RunReport): readonly string[] {
     const lines = [
       `run      ${report.runId} (${report.runDir})`,
-      `decision ${String(decision["decision"] ?? "(none)")}`,
+      `decision ${String(decision["decision"] ?? "(none)")}${decision["tie"] === true ? " (tie; definition order decided)" : ""}`,
     ];
     const independence = decision["independence"] as
       | { acceptedAnswers: number; duplicateRate: number; groups: number }

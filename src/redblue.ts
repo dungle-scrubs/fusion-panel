@@ -407,7 +407,7 @@ export const redblueDefinition: PatternDefinition = {
       `verdict  ${String(decision["judgeVerdict"] ?? "(none)")}`,
       `claims   surviving ${JSON.stringify(decision["survivingClaims"])}`,
     ];
-    for (const rejected of (decision["rejectedClaims"] ?? []) as {
+    for (const rejected of (decision["rejectedOptions"] ?? []) as {
       claimId: string;
       reason: string;
     }[]) {

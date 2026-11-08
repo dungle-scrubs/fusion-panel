@@ -57,8 +57,8 @@ export function judgePrompt(task: string, rubric: string): (input: StageInput) =
       "",
       "Do NOT include a provenance field.",
       "",
-      "OPTIONS (anonymized, one JSON per line):",
-      input.anonymizedClaims.map((c) => JSON.stringify(c)).join("\n"),
+      "OPTIONS (anonymized, one JSON per line; options several proposers filed appear once):",
+      ...optionRepresentatives(input.anonymizedClaims).map((entry) => JSON.stringify(entry.claim)),
     ].join("\n");
 }
 
@@ -72,9 +72,30 @@ export interface OptionTally {
 }
 
 /**
+ * One listing entry per canonical option: the first-seen claim id of each
+ * group of generate-stage answers. Judges see and score this list, so an
+ * option two proposers both filed is scored once, not once per copy.
+ */
+export function optionRepresentatives(
+  claims: readonly Record<string, unknown>[],
+): { canonical: string; claim: Record<string, unknown>; id: string }[] {
+  const seen = new Set<string>();
+  const listing: { canonical: string; claim: Record<string, unknown>; id: string }[] = [];
+  for (const claim of claims) {
+    const canonical = canonicalize(String(claim["claim"] ?? ""));
+    if (!seen.has(canonical)) {
+      seen.add(canonical);
+      listing.push({ canonical, claim, id: String(claim["claim_id"] ?? "") });
+    }
+  }
+  return listing;
+}
+
+/**
  * Mechanical shortlist fusion. Options are generate-stage answer claims,
  * deduplicated by canonical text across proposers. Verdicts are
- * challenge-stage claims whose dependencies target an option's id. An
+ * challenge-stage claims whose dependencies target an option's id; a
+ * judge counts at most once per option, whichever copy it cited. An
  * option advances when accepts are the strict majority of its verdicts;
  * the shortlist ranks by accepts, then mean confidence, then first-seen.
  * Options with no verdicts are flagged unscored rather than dropped.
@@ -125,6 +146,7 @@ export function shortlistFuse(accepted: readonly AcceptedClaim[]): FusedOutput &
     });
   }
 
+  const counted = new Set<string>();
   for (const verdict of verdicts) {
     const deps = Array.isArray(verdict.claim["dependencies"])
       ? verdict.claim["dependencies"].map(String)
@@ -141,6 +163,13 @@ export function shortlistFuse(accepted: readonly AcceptedClaim[]): FusedOutput &
       if (tally === undefined) {
         continue;
       }
+      // One verdict scores one option: the first canonical it targets, and
+      // only once per judge. Both exits leave the loop deliberately.
+      const key = `${verdict.workerId}\u0000${canonical}`;
+      if (counted.has(key)) {
+        break;
+      }
+      counted.add(key);
       const action = String(verdict.claim["requested_action"] ?? "");
       if (action === "accept") {
         tally.accepts += 1;
@@ -271,9 +300,11 @@ export const shortlistDefinition: PatternDefinition = {
           });
         }
         const options = new Set(
-          accepted
-            .filter((entry) => entry.stage === "generate" && entry.claim.kind === "answer")
-            .map((entry) => String(entry.claim.claim_id)),
+          optionRepresentatives(
+            accepted
+              .filter((entry) => entry.stage === "generate" && entry.claim.kind === "answer")
+              .map((entry) => entry.claim),
+          ).map((entry) => entry.id),
         );
         return [
           ...checkRoleClaims(claims, {

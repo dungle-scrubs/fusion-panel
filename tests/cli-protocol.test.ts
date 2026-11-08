@@ -1394,3 +1394,27 @@ describe("evidence freeze", () => {
     expect(jobIds(next.body)).toEqual(["challenge:w-blue"]);
   });
 });
+
+describe("tier-1 envelopes", () => {
+  it("validate --json carries every claim's verdict beside its E201 lines", () => {
+    const good = {
+      claim: "y",
+      claim_id: "C2",
+      confidence: 0.5,
+      falsifier: "f",
+      kind: "answer",
+      status: "inferred",
+    };
+    const bad = { ...good, claim_id: "C1", confidence: 2 };
+    const result = fusionJson(["validate"], `${JSON.stringify(bad)}\n${JSON.stringify(good)}\n`);
+    expect(result.code).toBe(2);
+    expect(result.body.ok).toBe(false);
+    expect(result.body.errors?.map((e) => e.code)).toEqual(["E201"]);
+    const verdicts = (result.body as { verdicts?: { claim_id: string; valid: boolean }[] })
+      .verdicts;
+    expect(verdicts?.map((v) => [v.claim_id, v.valid])).toEqual([
+      ["C1", false],
+      ["C2", true],
+    ]);
+  });
+});
