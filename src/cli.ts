@@ -64,7 +64,7 @@ import {
   scoreForecasts,
 } from "./tier1";
 
-const VERSION = "0.3.0"; // x-release-please-version
+const VERSION = "0.3.1"; // x-release-please-version
 
 interface ResolvedRun {
   run: string;
